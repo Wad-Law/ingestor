@@ -1,14 +1,11 @@
 name: Deploy to EC2 via SSM
 
 on:
-  workflow_run:
-    workflows: ["Build & Push to ECR"]
-    types: [ "completed" ]
   workflow_dispatch: {}
 
 jobs:
   deploy:
-    if: ${{ github.event.workflow_run.conclusion == 'success' || github.event_name == 'workflow_dispatch' }}
+    if: ${{ github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
     steps:
       - name: Configure AWS credentials
@@ -23,12 +20,5 @@ jobs:
           aws ssm send-command \
             --instance-ids "${{ secrets.EC2_INSTANCE_ID }}" \
             --document-name "AWS-RunShellScript" \
-            --parameters commands='[
-              "set -e",
-              "cd /opt/stack || cd /data/stack",
-              "aws ecr get-login-password --region ${{ secrets.AWS_REGION }} | docker login --username AWS --password-stdin ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com",
-              "docker compose pull",
-              "docker compose up -d",
-              "docker image prune -f"
-            ]' \
+            --parameters commands='["/opt/stack/deploy.sh ingestor"]' \
             --comment "Redeploy ingestor"

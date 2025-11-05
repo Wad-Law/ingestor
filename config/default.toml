@@ -1,0 +1,70 @@
+
+####################
+# Global settings
+####################
+[storage]
+# where raw payloads are persisted
+kind = "s3"
+bucket = "macro-raw"
+endpoint = "http://minio:9000"
+access_key = "minio"
+secret_key = "minio"
+base_path = "./blobdata"
+
+[zeormq]
+# sockets for inter service comms
+push_endpoint = "tcp://processors:5557"
+ack_endpoint = "tcp://0000:5558"
+snd_hwm = 1000
+rcv_hwm = 1000
+
+[supervisor]
+# how often health check and metrics
+metrics_interval_Secs = 15
+restart_backoff_sec = 5
+
+#################
+# Source actors
+################
+
+[sources.gdelt]
+enabled = true
+cadence_secs = 900
+poll_url = "https://api.gdeltproject.org/api"
+params.query = "sourcesCountry:US"
+params.timespan = "15MIN"
+rate_limit_rps = 0.1
+timeout_Secs = 20
+parser = "gdelt_csv"
+
+[sources.financialjuice]
+enabled = true
+candece_secs = 60
+poll_url = ""
+api_key = ""
+rate_limit_ps = 0.1
+timeout_secs = 10
+parser = "fj_json"
+
+[sources.ecb_rss]
+enabled = false
+cadence_secs = 300
+poll_rl = "https/www.ecb.europa.eu/press"
+parser = "rss"
+
+#################
+# Optional behavior
+###############
+[dedup]
+# how long to keep idempotency keys
+memory_ttl_secs= 86400
+persist_path = "./state/dedup.sqlite"
+
+[offsets]
+persist_path = "./state/offsets.sqlite"
+
+[waq]
+# write ahead queue for at least once semantics
+persist_aut = "./state/waq.sqlite"
+max_retries = 3
+retry_delay_Sec = 60

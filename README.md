@@ -1,1 +1,57 @@
 # ingestor
+
+- each source = one actor, same binary dynamic via config
+- adding new feed = add one block - no code changes
+- on actor can carry its own parser, rate limit, timeout
+
+- supervisore load the config
+- for each [source.*] section where enabled = true, it spawns a SourceActor
+  - reads poll_url
+  - rate-limits and schedules according to configs
+  - sends message to persistrawactor
+- Share persistrawactor and publishactor handle persistence to S3 and 0MQ output
+- AckManager runs globally to process acks and update offesets
+- bounded mailboxes for back pressure, supervision for restarts and waq for at least once
+- durability: always write raw payload to s3 first then send to 0MQ
+- At least once:
+  - add ack path: processor sends ack on seperate PUSH -> ingestor PULL
+  - Ingestore retries if no ACK within T second (from sqlite queue)
+- Idempotency, include a stable key; processors de-dup (unique index, in-memory LRU)
+- flow control set sndhwm/rcvhwm and consider batching
+- supervisor handles all actors, retries, metrics
+- logs and metrics around queue depth, ack latency retry count
+- SourceActor<TSource>
+  - polls api/websocket on a schedule with jitter
+  - emits raw payload (+ idempotency key)
+  - reads/writs its offset
+  - handles rate limits and exponenetial backoff
+- PersistActor
+  - writes paylod to s3
+  - if write fails retires after N attemp DLQ with context
+- PublisherActor
+  - Sends compact message over 0MQ
+  - Batches to controls throupout
+- OffsetStoreActor
+  - Persists offset in sqlite
+  - exposet get/set for updates
+- Supervisor restarts with exponential backoff
+- Backpressure and safety
+  - bounded mailboxes per actor
+    - if persistraw actor slow, sourceactor throttles
+    - waq: before publish append id,payload to sqlite table, remove on ack. guarantees at least once without kafka
+    - idempotency: each message carries a key, persistraw and processors enforce unique to avoid dup effects
+- scheduling and rate limits
+  - sourceacootr cadence = base_interval plus/minus jitter%
+  - handle retry-after
+- 0MQ
+  - load blancing across N processors
+  - enable batching
+- Supervison & shutdown
+  - restarts crashed actor with capped backoff
+  - on sigterm
+    - drain in-flight pipeline
+    - flush waq to disk, stop after grace period
+- Obs
+  - per source metrics: poll latency, success/fail, bytes, lag = now - timestamp
+  - persist latency, publish laTENCT, QUEUE DEPTH, RETRY COUYT
+  - 
