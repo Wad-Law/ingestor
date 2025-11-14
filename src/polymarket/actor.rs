@@ -5,7 +5,6 @@ use anyhow::Result;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
 use reqwest::Client;
-use futures::future::join_all;
 use futures::{stream, StreamExt};
 use tokio::time::interval;
 use crate::config::config::PolyCfg;

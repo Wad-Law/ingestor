@@ -128,8 +128,8 @@ pub fn parse_fj_response_to_raw(xml: &str) -> Result<Vec<RawNews>> {
             feed: "FinancialJuice".to_string(),
             title: title.to_string(),
             url: url.to_string(),
-            labels,
-            published,
+            labels: labels,
+            published: published,
             description: description.to_string(),
         };
 
@@ -144,20 +144,16 @@ impl FinJuiceActor {
         Self { bus, client, cfg, shutdown }
     }
 
-    pub async fn fetch_data_from_api(&self)-> Result<Vec<RawNews>>  {
+    async fn fetch_data_from_api(&self)-> Result<Vec<RawNews>>  {
+        let url = format!(
+            "{}?info={}&TimeOffSet=1&tabID=0&oldID=0&TickerID=0&FeedCompanyID=0&strSearch=&extraNID=0",
+            self.cfg.altUrl,
+            self.cfg.info,
+        );
+
         let xml = self.client
-            .get(&self.cfg.altUrl)
+            .get(url)
             .header("Origin", self.cfg.baseUrl.to_string())
-            .query(&[
-                ("info", self.cfg.info.to_string()),
-                ("TimeOffSet", 1.to_string()),
-                ("tabID", 0.to_string()),
-                ("oldID", 0.to_string()),
-                ("TickerID", 0.to_string()),
-                ("FeedCompanyID", 0.to_string()),
-                ("strSearch", "".to_string()),
-                ("extraNID", 0.to_string()),
-            ])
             .send()
             .await?
             .error_for_status()?
