@@ -2,17 +2,17 @@
 ## System Overview
 The system transforms live news into automated trades using the following steps:
 
-1 - Ingest real-time news + market updates
-2 - Normalize + clean text
-3 - Extract entities & dates
-4 - Retrieve candidate markets using BM25
-5 - Filter + score markets with a transparent heuristic
-6 - Select Top-K markets with diversity constraints
-7 - Convert scores → probabilities
-8 - Generate trade decisions based on edge vs market price
-9 - Kelly-size positions with risk caps
-10 - Execute orders with microstructure-aware rules
-11 - Persist all data to PostgreSQL (relational) & QuestDB (time-series)
+- Ingest real-time news + market updates
+- Normalize + clean text
+- Extract entities & dates
+- Retrieve candidate markets using BM25
+- Filter + score markets with a transparent heuristic
+- Select Top-K markets with diversity constraints
+- Convert scores → probabilities
+- Generate trade decisions based on edge vs market price
+- Kelly-size positions with risk caps
+- Execute orders with microstructure-aware rules
+- Persist all data to PostgreSQL (relational) & QuestDB (time-series)
 
 The system is fully event-driven and optimized for real-time reaction to macroeconomic headlines.
 
@@ -297,6 +297,9 @@ Why => Avoids redundant trades and reduces pipeline load.
 
 ### Score → Probability
 Convert final score s into a belief p:
+- Start with a monotonic mapping from your final score s∈[0,1] to probability
+- use logistic
+- apply conservatism shrink toward 0.5
 
 p_raw = sigmoid(a + b*s)
 p = 0.5 + λ*(p_raw - 0.5)
@@ -323,8 +326,10 @@ else → no trade
 τ = 0.01–0.02 for fee/slippage buffer.
 
 ### Kelly-Style Sizing (with Risk Caps)
-YES trade:
-f* = (p - y) / (1 - y)
+yes price is y no price is n = 1-y
+
+YES trade (buy YES at price y):
+f* = (p - y) / (1 - y) 
 
 NO trade:
 f* = (y - p) / y
@@ -336,7 +341,7 @@ Apply:
 - portfolio gross caps 
 - liquidity clipping (≤X% of book depth)
 
-Contracts: contracts = floor( bankroll * f / price )
+Contracts: number of contracts = floor( bankroll * f / price )
 
 ### Execution Rules (Practical Microstructure)
 ExecutionActor enforces:
@@ -350,11 +355,17 @@ Slicing
 - Reprice on quote change
 
 TTL / Cancellation 
-- Order expires if not filled in N seconds
+- Order expires if not filled in N seconds and re-queue if not filled
 
 Slippage-aware: Incorporate spread + fee into edge check
 
 Cooldown: Avoid flip-flopping on small price moves
+
+### Exit/management
+- Target exit: as price approaches your belief (or outcome time nears).
+- Stop-loss: optional soft stop on edge reversal p−y flips sign beyond −τ).
+- Time decay: reduce position as resolution nears if liquidity vanishes.
+- Rebalance: if your belief updates (new headlines), recompute and resize.
 
 ## Storage
 
