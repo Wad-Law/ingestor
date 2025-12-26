@@ -14,8 +14,8 @@ jobs:
     env:
       AWS_REGION: ${{ secrets.AWS_REGION }}
       AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
-      ECR_REPO: ${{ secrets.ECR_REPO_INGESTOR }}
-      IMAGE_URI: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/${{ secrets.ECR_REPO_INGESTOR }}
+      ECR_REPO: ${{ secrets.ECR_REPO_POLYMIND }}
+      IMAGE_URI: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/${{ secrets.ECR_REPO_POLYMIND }}
       SHA: ${{ github.sha }}
 
     steps:

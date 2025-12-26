@@ -59,8 +59,8 @@ LLM_API_KEY="sk-..."
 
 ### Running
 ```bash
-# Run the ingestor
-cargo run --bin ingestor
+# Run polymind
+cargo run --bin polymind
 
 # Run tests
 cargo test
