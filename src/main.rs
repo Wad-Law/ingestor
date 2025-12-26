@@ -6,6 +6,8 @@ mod execution;
 mod finjuice;
 mod llm;
 mod marketdata;
+mod persistence;
+mod risk;
 mod rss;
 mod strategy;
 
@@ -21,6 +23,7 @@ use marketdata::actor::MarketPricingActor;
 use reqwest::Client;
 use rss::actor::RssActor;
 
+use risk::actor::RiskActor;
 use strategy::actor::StrategyActor;
 use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, error, info, info_span};
@@ -83,7 +86,19 @@ async fn main() -> Result<()> {
         cfg.polymarket.clone(),
         shutdown.clone(),
     );
-    let strat = StrategyActor::new(bus.clone(), shutdown.clone(), &cfg);
+    let risk = RiskActor::new(bus.clone(), shutdown.clone());
+
+    info!("Initializing Database using Postgres URL");
+    // Default to a common postgres local url if not set
+    let db_url = std::env::var("DATABASE_URL")
+        .unwrap_or_else(|_| "postgres://user:password@localhost:5432/ingestor".to_string());
+
+    use persistence::database::Database;
+    let db = Database::new(&db_url)
+        .await
+        .expect("Failed to init database");
+
+    let strat = StrategyActor::new(bus.clone(), shutdown.clone(), &cfg, db.clone());
     let exec_client = PolyExecutionClient::new(cfg.polymarket.clone(), client.clone());
     let exec = ExecutionActor::new(bus.clone(), shutdown.clone(), exec_client);
 
@@ -96,6 +111,7 @@ async fn main() -> Result<()> {
     actors.spawn(market_data.run().instrument(info_span!("MarketData")));
     actors.spawn(strat.run().instrument(info_span!("Strat")));
     actors.spawn(exec.run().instrument(info_span!("Exec")));
+    actors.spawn(risk.run().instrument(info_span!("Risk")));
 
     info!("Waiting for actors");
 

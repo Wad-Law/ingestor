@@ -1,10 +1,13 @@
-use std::fmt::Debug;
-use std::sync::Arc;
+use crate::core::types::{
+    BalanceUpdate, Execution, MarketDataRequest, MarketDataSnap, Order, PolyMarketEvent, RawNews,
+    SystemStatus,
+};
 use anyhow::Result;
 use async_trait::async_trait;
-use tokio::sync::{broadcast};
+use std::fmt::Debug;
+use std::sync::Arc;
+use tokio::sync::broadcast;
 use tracing::info;
-use crate::core::types::{RawNews, MarketDataRequest, MarketDataSnap, Order, Execution, PolyMarketEvent};
 
 // ---------- Topic trait (broadcast semantics) ----------
 #[async_trait::async_trait]
@@ -51,6 +54,9 @@ pub struct Bus {
     pub market_data: Arc<dyn Topic<MarketDataSnap>>,
     pub orders: Arc<dyn Topic<Order>>,
     pub executions: Arc<dyn Topic<Execution>>,
+    pub balance: Arc<dyn Topic<BalanceUpdate>>,
+    pub system_status: Arc<dyn Topic<SystemStatus>>,
+    pub positions_snapshot: Arc<dyn Topic<crate::core::types::PositionSnapshot>>,
 }
 
 impl Bus {
@@ -64,6 +70,11 @@ impl Bus {
             market_data: Arc::new(BroadcastTopic::<MarketDataSnap>::with_capacity(cap)),
             orders: Arc::new(BroadcastTopic::<Order>::with_capacity(cap)),
             executions: Arc::new(BroadcastTopic::<Execution>::with_capacity(cap)),
+            balance: Arc::new(BroadcastTopic::<BalanceUpdate>::with_capacity(cap)),
+            system_status: Arc::new(BroadcastTopic::<SystemStatus>::with_capacity(cap)),
+            positions_snapshot: Arc::new(
+                BroadcastTopic::<crate::core::types::PositionSnapshot>::with_capacity(cap),
+            ),
         }
     }
 }

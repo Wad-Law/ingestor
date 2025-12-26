@@ -171,6 +171,8 @@ mod tests {
             api_secret: "".to_string(),
             passphrase: "".to_string(),
             token_decimals: 6,
+            rpc_url: "http://localhost:8545".to_string(),
+            data_api_url: "http://localhost/positions".to_string(),
         }
     }
 

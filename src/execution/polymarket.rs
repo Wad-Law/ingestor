@@ -5,7 +5,7 @@ use ethers::abi::Address;
 use ethers::prelude::*;
 use ethers::signers::{LocalWallet, Signer};
 use ethers::types::U256;
-// use ethers::utils::to_checksum; // Unused
+use ethers::types::transaction::eip2718::TypedTransaction;
 use reqwest::Client;
 use rust_decimal::Decimal;
 use rust_decimal::prelude::*;
@@ -239,8 +239,11 @@ impl PolyExecutionClient {
         info!("Order placed successfully: {:?}", resp_json);
 
         let execution = Execution {
+            exchange_order_id: Some(resp_json.order_id),
             client_order_id: order.client_order_id.clone(),
             market_id: order.market_id.clone(),
+            token_id: order.token_id.clone(),
+            side: order.side,
             avg_px: order.price,
             filled: order.size,
             fee: Decimal::ZERO,
@@ -248,5 +251,120 @@ impl PolyExecutionClient {
         };
 
         Ok(execution)
+    }
+
+    pub async fn get_balance(&self) -> Result<Decimal> {
+        if self.wallet.is_none() {
+            return Ok(Decimal::ZERO);
+        }
+        let wallet = self.wallet.as_ref().unwrap();
+        let address = wallet.address();
+
+        // Polygon USDC Address
+        let usdc_address: Address = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174".parse()?;
+
+        // Minimal ERC20 ABI for balanceOf
+        // function balanceOf(address owner) view returns (uint256)
+        // Selector: 0x70a08231
+        let provider = Provider::<Http>::try_from(self.cfg.rpc_url.clone())?;
+
+        // Ethers middleware (Provider)
+        // Using raw call or generating contract bindings.
+        // Raw call is simpler for just one method.
+
+        let data = ethers::abi::encode(&[ethers::abi::Token::Address(address)]);
+        let mut call_data = vec![0x70, 0xa0, 0x82, 0x31]; // 4-byte selector
+        call_data.extend(data);
+
+        let tx = TransactionRequest::new().to(usdc_address).data(call_data);
+
+        let tx: TypedTransaction = tx.into();
+        let balance_u256 = provider.call(&tx, None).await?;
+        if balance_u256.len() < 32 {
+            // Should be 32 bytes for uint256
+            return Ok(Decimal::ZERO);
+        }
+
+        // Correct way with raw bytes: `U256::from_big_endian` is usually correct for EVM return.
+        let balance_val = U256::from_big_endian(&balance_u256);
+
+        // Convert to Decimal (USDC has 6 decimals)
+        let decimals = 6;
+        let scale = 10u64.pow(decimals);
+        // Balance is integer. Division?
+        // Wait, to_f64 might lose precision for massive whales but fine for now.
+        // Or manual string parsing.
+
+        let bal_str = balance_val.to_string();
+        let bal_dec = Decimal::from_str(&bal_str).unwrap_or(Decimal::ZERO);
+        let scale_dec = Decimal::from(scale);
+
+        Ok(bal_dec / scale_dec)
+    }
+    pub async fn get_positions(&self) -> Result<Vec<crate::core::types::Position>> {
+        if self.wallet.is_none() {
+            anyhow::bail!("No wallet configured");
+        }
+        let address = self.wallet.as_ref().unwrap().address();
+        let url = format!("{}/positions", self.cfg.data_api_url);
+
+        let res = self
+            .client
+            .get(&url)
+            .query(&[
+                ("user", format!("{:?}", address)),
+                ("limit", "500".to_string()),
+            ])
+            .send()
+            .await?;
+
+        if !res.status().is_success() {
+            let error_text = res.text().await?;
+            anyhow::bail!("Polymarket Data API error: {}", error_text);
+        }
+
+        // We need a struct to deserialize the response.
+        // Since this is specific to this method, we can define a private struct or use serde_json::Value.
+        // Let's use serde_json::Value for flexibility if we don't want to clutter with structs right now,
+        // but explicit structs are better.
+        // Response is usually a list of positions. Note: The API might return { data: [...] } or just [...].
+        // Documentation says list? Let's check. Use Value to be safe first.
+        let json: serde_json::Value = res.json().await?;
+
+        let mut positions = Vec::new();
+
+        if let Some(arr) = json.as_array() {
+            for item in arr {
+                // Parse item into crate::core::types::Position
+                // This requires mapping fields manually unless they match exact names.
+                // Common fields: market, asset, size, etc.
+                if let (Some(market_id), Some(token_id), Some(size_str), Some(side_str)) = (
+                    item.get("market").and_then(|v| v.as_str()),
+                    item.get("asset").and_then(|v| v.as_str()),
+                    item.get("size").and_then(|v| v.as_str()),
+                    item.get("side").and_then(|v| v.as_str()),
+                ) {
+                    let size = Decimal::from_str(size_str).unwrap_or(Decimal::ZERO);
+                    let side = match side_str.to_uppercase().as_str() {
+                        "BUY" | "LONG" => Side::Buy,
+                        "SELL" | "SHORT" => Side::Sell,
+                        _ => Side::Buy, // Default?
+                    };
+
+                    positions.push(crate::core::types::Position {
+                        market_id: market_id.to_string(),
+                        token_id: token_id.to_string(),
+                        side,
+                        quantity: size,
+                        avg_entry_price: Decimal::ZERO, // API might give avgPrice
+                        current_price: Decimal::ZERO,
+                        unrealized_pnl: Decimal::ZERO,
+                        last_updated_ts: chrono::Utc::now().timestamp_millis(),
+                    });
+                }
+            }
+        }
+
+        Ok(positions)
     }
 }

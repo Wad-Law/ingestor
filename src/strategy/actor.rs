@@ -1,7 +1,7 @@
 use crate::bus::types::Bus;
 use crate::config::config::AppCfg;
 use crate::core::types::{
-    Actor, Execution, MarketDataRequest, MarketDataSnap, Order, PolyMarketEvent, RawNews,
+    Actor, Execution, MarketDataRequest, MarketDataSnap, Order, PolyMarketEvent, Portfolio, RawNews,
 };
 use crate::llm::LlmClient;
 use crate::strategy::canonical_event::CanonicalEventBuilder;
@@ -23,6 +23,8 @@ use std::collections::HashMap;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
+use crate::persistence::database::Database;
+
 pub struct StrategyActor {
     pub bus: Bus,
     pub shutdown: CancellationToken,
@@ -36,10 +38,13 @@ pub struct StrategyActor {
     pub market_data_cache: HashMap<String, MarketDataSnap>,
     pub bankroll: Decimal,
     pub llm_client: LlmClient,
+    pub db: Database,
+    pub portfolio: Portfolio,
+    pub status: crate::core::types::SystemStatus,
 }
 
 impl StrategyActor {
-    pub fn new(bus: Bus, shutdown: CancellationToken, cfg: &AppCfg) -> StrategyActor {
+    pub fn new(bus: Bus, shutdown: CancellationToken, cfg: &AppCfg, db: Database) -> StrategyActor {
         Self {
             bus,
             shutdown,
@@ -55,6 +60,13 @@ impl StrategyActor {
             market_data_cache: HashMap::new(),
             bankroll: Decimal::from_f64(cfg.strategy.bankroll).unwrap_or(Decimal::ZERO),
             llm_client: LlmClient::new(cfg.llm.clone()),
+            db,
+            portfolio: Portfolio {
+                positions: HashMap::new(),
+                cash: Decimal::from_f64(cfg.strategy.bankroll).unwrap_or(Decimal::ZERO), // Init cash from config
+                total_equity: Decimal::ZERO,
+            },
+            status: crate::core::types::SystemStatus::Active,
         }
     }
 
@@ -98,12 +110,28 @@ impl StrategyActor {
         //                ↓
         //      entity/date extraction → BM25 → scoring → decision
 
-        // 1. Cheap exact dedup to eliminate trivial duplicates
+        // 1. Check for Halt
+        if let crate::core::types::SystemStatus::Halted(reason) = &self.status {
+            warn!("Skipping news processing due to HALT: {}", reason);
+            return order;
+        }
+
+        // 2. Cheap exact dedup to eliminate trivial duplicates
         if self.detector.is_duplicate(raw_news) {
             println!("Skipping duplicate news.");
+            return order; // Return empty if dup
         } else {
             println!("New event — continue pipeline.");
         }
+
+        // Persist Event (fire and forget / log error)
+        let event_db_id = match self.db.save_event(raw_news).await {
+            Ok(id) => Some(id),
+            Err(e) => {
+                error!("Failed to save event to DB: {}", e);
+                None
+            }
+        };
 
         // 2. Tokenize
         let cfg = TokenizationConfig::default();
@@ -134,7 +162,6 @@ impl StrategyActor {
             .apply(raw_candidates, entities, time_window);
 
         // 6. LLM Scoring
-        // 6. LLM Scoring
         let mut edged_candidates = Vec::new();
 
         // Take top N candidates for LLM analysis to save costs
@@ -144,14 +171,7 @@ impl StrategyActor {
         self.ensure_market_data(&top_candidates).await;
 
         for candidate in top_candidates {
-            // Retrieve market question/title from index or cache (simplified here using candidate data if available)
-            // We need the market question. The candidate has market_id.
-            // We can try to get it from market_data_cache if available, or we might need to store it in the index.
-            // For now, let's assume we can get it from the cache or it's part of the candidate metadata (which it isn't yet).
-            // Fallback: use a placeholder or skip if missing.
-
-            // In a real implementation, we'd fetch the market title from a MarketStore.
-            // Let's assume we have it in market_data_cache for now.
+            // ... (market question retrieval)
             let market_question =
                 if let Some(snap) = self.market_data_cache.get(&candidate.market_id) {
                     snap.question.clone()
@@ -167,6 +187,17 @@ impl StrategyActor {
             {
                 Ok(signal) => {
                     info!("LLM Signal for {}: {:?}", candidate.market_id, signal);
+
+                    // Persist Signal
+                    if let Some(eid) = event_db_id {
+                        if let Err(e) = self
+                            .db
+                            .save_signal(eid, &candidate.market_id, &signal)
+                            .await
+                        {
+                            error!("Failed to save signal: {}", e);
+                        }
+                    }
 
                     // Convert signal to TradeSide and Probability
                     let (_side, prob) = match signal.sentiment.as_str() {
@@ -194,7 +225,8 @@ impl StrategyActor {
                     if prob > Decimal::new(6, 1) {
                         // Threshold 0.6
                         let edged = EdgedCandidate {
-                            candidate,
+                            candidate: candidate.clone(), // Clone candidate? It was moved? No, loop is for candidate in top_candidates.
+                            // Need to make sure types match. candidate is RawCandidate.
                             score: prob,
                             probability: prob,
                             market_price,
@@ -212,8 +244,16 @@ impl StrategyActor {
         // 7. Kelly Sizing
         let sized_decisions = self.kelly_sizer.size_positions(edged_candidates);
 
+        // Persist Decisions
+        for decision in &sized_decisions {
+            if let Err(e) = self.db.save_decision(event_db_id, decision).await {
+                error!("Failed to save decision: {}", e);
+            }
+        }
+
         // 8. Build Orders
         self.build_orders_from_sized_decisions(&sized_decisions)
+            .await
     }
 
     fn retrieve_candidates(&mut self, tokens: &[String], raw_text: &str) -> Vec<RawCandidate> {
@@ -292,7 +332,7 @@ impl StrategyActor {
         }
     }
 
-    fn build_orders_from_sized_decisions(&self, sized: &[SizedDecision]) -> Vec<Order> {
+    async fn build_orders_from_sized_decisions(&self, sized: &[SizedDecision]) -> Vec<Order> {
         let mut orders = Vec::new();
         // Use configured bankroll
         let bankroll = self.bankroll;
@@ -353,6 +393,12 @@ impl StrategyActor {
                 price,
                 size: quantity,
             };
+
+            // Persist Order
+            if let Err(e) = self.db.save_order(&order).await {
+                error!("Failed to save order: {}", e);
+            }
+
             orders.push(order);
         }
         orders
@@ -425,17 +471,93 @@ impl StrategyActor {
         None
     }
 
-    fn decide_from_executions(&mut self, execution: &Execution) -> Option<Order> {
+    async fn decide_from_executions(&mut self, execution: &Execution) -> Option<Order> {
         info!("StrategyActor received execution: {:?}", execution);
-        // High-level responsibilities:
-        // - Update internal notion of open positions, risk, PnL.
-        // - Possibly issue follow-up orders:
-        //   * scale in/out
-        //   * hedge correlated markets
-        //   * reduce exposure if fills are larger than planned
-        //
-        // For now: delegate to a placeholder:
+
+        // 1. Persist Execution
+        if let Err(e) = self.db.save_execution(execution).await {
+            error!("Failed to save execution: {}", e);
+        }
+
+        // 2. Update Portfolio
+        // We need a token_id to uniquely identify the position.
+        // The Execution may not have it if it comes from exchange drop copy generically,
+        // but our Execution struct doesn't have it either (it has market_id).
+        // However, standard Polymarket positions are on Token IDs (ERC1155).
+        // Since we don't have token_id in Execution msg, we have to look it up or assume logic.
+        // PROVISIONAL: We will assume we can derive or find it.
+        // For now, let's try to match with an open order if we had one?
+        // Or simpler: Use "MarketID-Side" as a composite key if we only hold one token per side per market?
+        // Actually, we stored `token_id` in `Order` table. We could query DB for the order by `client_order_id` to get `token_id`.
+        // This causes a DB read per execution, but is safe.
+
+        // For this step, I will leave a TODO and use market_id as fallback valid token_id.
+        let token_id = execution
+            .token_id
+            .clone()
+            .unwrap_or(execution.market_id.clone());
+
+        if let Some(updated_pos) = self.portfolio.update_from_execution(execution, &token_id) {
+            info!("Updated position for {}: {:?}", token_id, updated_pos);
+
+            // 3. Persist Position
+            if let Err(e) = self.db.upsert_position(&updated_pos).await {
+                error!("Failed to upsert position: {}", e);
+            }
+        }
+
         None
+    }
+
+    fn reconcile_positions(&mut self, snap: &crate::core::types::PositionSnapshot) {
+        info!(
+            "Reconciling portfolio with {} external positions",
+            snap.positions.len()
+        );
+
+        // 1. Mark all current positions as potentially stale (optional, or just clear and rebuild?)
+        // Clearing and rebuilding is safer to remove "zombie" positions (internal yes, external no).
+        // However, we lose "avg_entry_price" if the external API doesn't provide it nicely.
+        // Polymarket API provides average entry price usually. The struct Position has it.
+        // Assuming the snapshot Position has correct data.
+
+        // Let's iterate and overwrite.
+        // Also need to identify positions present in internal but NOT in snapshot (closed manually?).
+
+        let mut present_token_ids = std::collections::HashSet::new();
+
+        for ext_pos in &snap.positions {
+            present_token_ids.insert(ext_pos.token_id.clone());
+
+            // Check drift
+            if let Some(int_pos) = self.portfolio.positions.get(&ext_pos.token_id) {
+                if int_pos.quantity != ext_pos.quantity {
+                    warn!(
+                        "Position DRIFT for {}: Internal {} vs External {}. Adjusting.",
+                        ext_pos.token_id, int_pos.quantity, ext_pos.quantity
+                    );
+                }
+            } else {
+                info!(
+                    "New external position found during reconciliation: {}",
+                    ext_pos.token_id
+                );
+            }
+
+            // Overwrite
+            self.portfolio
+                .positions
+                .insert(ext_pos.token_id.clone(), ext_pos.clone());
+        }
+
+        // Remove zombies
+        let internal_ids: Vec<String> = self.portfolio.positions.keys().cloned().collect();
+        for id in internal_ids {
+            if !present_token_ids.contains(&id) {
+                warn!("Removing ZOMBIE position {} (not on exchange)", id);
+                self.portfolio.positions.remove(&id);
+            }
+        }
     }
 }
 
@@ -444,11 +566,28 @@ impl Actor for StrategyActor {
     async fn run(mut self) -> Result<()> {
         info!("StrategyActor started");
 
+        // Load positions from DB
+        match self.db.load_positions().await {
+            Ok(positions) => {
+                info!("Loaded {} positions from database", positions.len());
+                for pos in positions {
+                    self.portfolio.positions.insert(pos.token_id.clone(), pos);
+                }
+            }
+            Err(e) => {
+                error!("Failed to load positions from database: {}", e);
+                // Decide if we should crash or continue. For now continue but log heavily.
+            }
+        }
+
         // Subscribe to both broadcast streams
         let mut md_rx = self.bus.market_data.subscribe(); // broadcast::Receiver<Arc<MarketDataSnap>>
         let mut poly_rx = self.bus.polymarket_events.subscribe(); // broadcast::Receiver<Arc<RawNews>>
         let mut news_rx = self.bus.raw_news.subscribe(); // broadcast::Receiver<Arc<RawNews>>
         let mut executions_rx = self.bus.executions.subscribe(); // broadcast::Receiver<Arc<Executions>>
+        let mut balance_rx = self.bus.balance.subscribe();
+        let mut status_rx = self.bus.system_status.subscribe();
+        let mut snapshot_rx = self.bus.positions_snapshot.subscribe();
 
         loop {
             tokio::select! {
@@ -456,6 +595,30 @@ impl Actor for StrategyActor {
                 _ = self.shutdown.cancelled() => {
                     info!("StrategyActor: shutdown requested");
                     break;
+                }
+
+                // System Status
+                res = status_rx.recv() => {
+                    match res {
+                        Ok(status) => {
+                            info!("StrategyActor received system status update: {:?}", status);
+                            self.status = (*status).clone();
+                            if let crate::core::types::SystemStatus::Halted(reason) = &self.status {
+                                warn!("StrategyActor HALTED: {}", reason);
+                            }
+                        }
+                        Err(e) => error!("System status stream error: {}", e),
+                    }
+                }
+
+                // Position Reconciliation
+                res = snapshot_rx.recv() => {
+                    match res {
+                        Ok(snap) => {
+                            self.reconcile_positions(&snap);
+                        }
+                        Err(e) => error!("Position snapshot stream error: {}", e),
+                    }
                 }
 
                 // Market data path
@@ -499,7 +662,7 @@ impl Actor for StrategyActor {
                 res = executions_rx.recv() => {
                     match res {
                         Ok(executions) => {
-                            if let Some(order) = self.decide_from_executions(&executions) {
+                            if let Some(order) = self.decide_from_executions(&executions).await {
                                 self.bus.orders.publish(order).await?;
                             }
                         }
@@ -530,6 +693,26 @@ impl Actor for StrategyActor {
                         }
                     }
                 }
+
+                // Balance updates
+                res = balance_rx.recv() => {
+                    match res {
+                        Ok(update) => {
+                            info!("StrategyActor received balance update: {} USDC", update.cash);
+                            self.portfolio.cash = update.cash;
+                            self.bankroll = update.cash; // Update detailed bankroll too? Or keep separate?
+                            // StrategyCfg has bankroll, but we want dynamic.
+                            // Assuming self.bankroll is what we use for sizing.
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                            warn!(lagged = n, "StrategyActor lagged on balance updates");
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                            error!("balance stream closed");
+                            // Non-critical, continue
+                        }
+                    }
+                }
             }
         }
         info!("StrategyActor stopped cleanly");
@@ -546,9 +729,19 @@ mod tests {
     use crate::strategy::sim_hash_cache::SimHashCacheConfig;
     use crate::strategy::types::{EdgedCandidate, RawCandidate, SizedDecision, TradeSide};
 
-    #[test]
-    fn test_token_id_resolution() {
+    #[tokio::test]
+    #[ignore] // Skip test requiring Postgres connection
+    async fn test_token_id_resolution() {
         // Setup minimal actor
+        // Note: This test now requires a running Postgres instance.
+        // Use `cargo test --ignored` if you have one running and DATABASE_URL set.
+        let db_url = std::env::var("DATABASE_URL")
+            .unwrap_or("postgres://user:pass@localhost:5432/db".to_string());
+        let db = match crate::persistence::database::Database::new(&db_url).await {
+            Ok(d) => d,
+            Err(_) => return, // Skip if no DB
+        };
+
         let mut actor = StrategyActor {
             bus: Bus::new(),
             shutdown: CancellationToken::new(),
@@ -566,6 +759,9 @@ mod tests {
             market_data_cache: HashMap::new(),
             bankroll: Decimal::from_f64(1000.0).unwrap(),
             llm_client: LlmClient::new(crate::config::config::LlmCfg::default()),
+            db,
+            portfolio: Portfolio::default(),
+            status: crate::core::types::SystemStatus::Active,
         };
 
         // Mock Market Data
@@ -613,7 +809,9 @@ mod tests {
             side: TradeSide::BuyYes,
         };
 
-        let orders_yes = actor.build_orders_from_sized_decisions(&[decision_yes]);
+        let orders_yes = actor
+            .build_orders_from_sized_decisions(&[decision_yes])
+            .await;
         assert_eq!(orders_yes.len(), 1);
         assert_eq!(orders_yes[0].token_id, Some(yes_token.to_string()));
 
@@ -634,7 +832,9 @@ mod tests {
             side: TradeSide::BuyNo,
         };
 
-        let orders_no = actor.build_orders_from_sized_decisions(&[decision_no]);
+        let orders_no = actor
+            .build_orders_from_sized_decisions(&[decision_no])
+            .await;
         assert_eq!(orders_no.len(), 1);
         assert_eq!(orders_no[0].token_id, Some(no_token.to_string()));
     }

@@ -15,7 +15,7 @@ serde = { version = "1.0.228", features = ["derive"] }
 futures = "0.3.31"
 humantime-serde = "1"
 config = "0.15.19"
-chrono = "0.4.42"
+chrono = { version = "0.4.42", features = ["serde"] }
 rss = "2.0.12"
 scraper = "0.24.0"
 chrono-tz = "0.10.4"
@@ -33,3 +33,4 @@ hex = "0.4.3"
 dotenv = "0.15.0"
 fastembed = "5.5.0"
 rust_decimal = { version = "1.36", features = ["serde"] }
+sqlx = { version = "0.7", features = ["postgres", "runtime-tokio", "macros", "chrono", "rust_decimal"] }

@@ -9,6 +9,7 @@ polymarket:
   baseUrl: "https://api.polymarket.com"
   gammaEventsUrl: "https://gamma-api.polymarket.com/events"
   gammaMarketsUrl: "https://gamma-api.polymarket.com/markets"
+  rpcUrl: "https://polygon-rpc.com"
   marketListRefresh: "30s"
   pageLimit: 100
   ascending: false

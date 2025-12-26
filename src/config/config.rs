@@ -109,6 +109,10 @@ pub struct PolyCfg {
     pub passphrase: String,
     #[serde(rename = "tokenDecimals", default = "default_token_decimals")]
     pub token_decimals: u32,
+    #[serde(rename = "rpcUrl")]
+    pub rpc_url: String,
+    #[serde(rename = "dataApiUrl", default = "default_data_api_url")]
+    pub data_api_url: String,
 }
 
 impl Default for PolyCfg {
@@ -125,6 +129,8 @@ impl Default for PolyCfg {
             api_secret: "".to_string(),
             passphrase: "".to_string(),
             token_decimals: default_token_decimals(),
+            rpc_url: "https://polygon-rpc.com".to_string(),
+            data_api_url: "https://data-api.polymarket.com".to_string(),
         }
     }
 }
@@ -133,6 +139,9 @@ fn default_page_limit() -> u32 {
 }
 fn default_token_decimals() -> u32 {
     6
+}
+fn default_data_api_url() -> String {
+    "https://data-api.polymarket.com".to_string()
 }
 
 #[derive(Debug, Deserialize, Clone)]

@@ -1,10 +1,11 @@
 use crate::bus::types::Bus;
 use crate::core::types::Actor;
+use crate::core::types::BalanceUpdate;
 use crate::execution::polymarket::PolyExecutionClient;
 use anyhow::Result;
-// use rust_decimal::Decimal; // Unused
+use chrono::Utc;
 use tokio_util::sync::CancellationToken;
-use tracing::{error, info}; // warn unused
+use tracing::{error, info};
 
 pub struct ExecutionActor {
     pub bus: Bus,
@@ -30,13 +31,50 @@ impl ExecutionActor {
 impl Actor for ExecutionActor {
     async fn run(mut self) -> Result<()> {
         info!("ExecutionActor started");
+
+        // Initial balance fetch
+        match self.client.get_balance().await {
+            Ok(bal) => {
+                info!("Initial Bankroll: {} USDC", bal);
+                let update = BalanceUpdate {
+                    cash: bal,
+                    ts: Utc::now().timestamp_millis(),
+                };
+                if let Err(e) = self.bus.balance.publish(update).await {
+                    error!("Failed to publish initial balance: {}", e);
+                }
+            }
+            Err(e) => {
+                error!("Failed to fetch initial balance: {}", e);
+            }
+        }
+
         let mut rx = self.bus.orders.subscribe(); // broadcast::Receiver<Arc<MarketDataRequest>>
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
+
         loop {
             tokio::select! {
                 // Graceful shutdown signal
                 _ = self.shutdown.cancelled() => {
                         info!("ExecutionActor: shutdown requested");
                         break;
+                }
+
+                // Periodic Reconciliation
+                _ = interval.tick() => {
+                    match self.client.get_positions().await {
+                        Ok(positions) => {
+                            info!("Fetched {} positions for reconciliation", positions.len());
+                            let snapshot = crate::core::types::PositionSnapshot {
+                                positions,
+                                timestamp: Utc::now().timestamp_millis(),
+                            };
+                            if let Err(e) = self.bus.positions_snapshot.publish(snapshot).await {
+                                error!("Failed to publish position snapshot: {}", e);
+                            }
+                        }
+                        Err(e) => error!("Failed to fetch positions: {}", e),
+                    }
                 }
 
                 // Order requests

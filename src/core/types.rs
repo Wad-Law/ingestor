@@ -7,8 +7,14 @@ pub trait Actor: Send + Sync + 'static {
     async fn run(self) -> Result<()>;
 }
 
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub enum SystemStatus {
+    Active,
+    Halted(String), // Reason
+}
+
 // ----------- Domain messages -----------------
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RawNews {
     #[allow(dead_code)]
     pub url: String,
@@ -48,7 +54,7 @@ pub struct MarketDataSnap {
     pub question: String,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Copy)]
+#[derive(Clone, Debug, PartialEq, Eq, Copy, Serialize, Deserialize)]
 pub enum Side {
     Buy,
     #[allow(dead_code)]
@@ -68,9 +74,15 @@ pub struct Order {
 #[derive(Clone, Debug)]
 pub struct Execution {
     #[allow(dead_code)]
+    pub exchange_order_id: Option<String>,
+    #[allow(dead_code)]
     pub client_order_id: String,
     #[allow(dead_code)]
     pub market_id: String,
+    #[allow(dead_code)]
+    pub token_id: Option<String>,
+    #[allow(dead_code)]
+    pub side: Side,
     #[allow(dead_code)]
     pub avg_px: Decimal,
     #[allow(dead_code)]
@@ -100,4 +112,101 @@ pub struct PolyMarketMarket {
     pub question: Option<String>,
     #[serde(default)]
     pub description: Option<String>,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Position {
+    pub market_id: String,
+    pub token_id: String,
+    pub side: Side,
+    pub quantity: Decimal,
+    pub avg_entry_price: Decimal,
+    pub current_price: Decimal,
+    pub unrealized_pnl: Decimal,
+    pub last_updated_ts: i64,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct BalanceUpdate {
+    pub cash: Decimal,
+    pub ts: i64,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PositionSnapshot {
+    pub positions: Vec<Position>,
+    pub timestamp: i64,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct Portfolio {
+    pub positions: std::collections::HashMap<String, Position>, // key: token_id usually, or market_id+token_id
+    pub cash: Decimal,
+    pub total_equity: Decimal,
+}
+
+impl Portfolio {
+    pub fn update_from_execution(
+        &mut self,
+        execution: &crate::core::types::Execution,
+        token_id: &str,
+    ) -> Option<Position> {
+        // If we don't track cash here fully yet, we focus on Position update.
+        // Assuming execution side matches position side for "opening".
+        // If "closing", we reduce quantity.
+
+        // Simple assumption:
+        // Buy = Open/Increase Long
+        // Sell = Close/Decrease Long (assuming we are long-only on these binary tokens for now)
+        // Or if we support Shorting? Polymarket is usually Buy Yes / Buy No (which are both long variations).
+        // Sending "Sell" usually means selling the token we own.
+
+        let position = self
+            .positions
+            .entry(token_id.to_string())
+            .or_insert(Position {
+                market_id: execution.market_id.clone(),
+                token_id: token_id.to_string(),
+                side: execution.side,
+                quantity: Decimal::ZERO,
+                avg_entry_price: Decimal::ZERO,
+                current_price: execution.avg_px, // Set current to execution price
+                unrealized_pnl: Decimal::ZERO,
+                last_updated_ts: execution.ts_ms,
+            });
+
+        match execution.side {
+            Side::Buy => {
+                // Weighted Average Entry Price
+                // New Avg = ((OldQty * OldAvg) + (FillQty * FillPx)) / (OldQty + FillQty)
+                let total_cost = (position.quantity * position.avg_entry_price)
+                    + (execution.filled * execution.avg_px);
+                let new_qty = position.quantity + execution.filled;
+
+                if new_qty > Decimal::ZERO {
+                    position.avg_entry_price = total_cost / new_qty;
+                }
+                position.quantity = new_qty;
+            }
+            Side::Sell => {
+                // Selling reduces quantity but doesn't change Avg Entry Price (FIFO/Weighted assumption)
+                // Realized PnL would be calculated here (Difference between Exit Price and Avg Entry).
+                // position.quantity -= execution.filled;
+                // If we go negative? Should be guarded.
+
+                // PnL = (ExitPx - EntryPx) * Qty
+                // We don't store RealizedPnL in Position struct (it's "Unrealized").
+                // So just reduce Qty.
+                position.quantity -= execution.filled;
+                if position.quantity < Decimal::ZERO {
+                    // We went short? Or error?
+                    // For now allow negative to indicate short or error state
+                }
+            }
+        }
+
+        position.current_price = execution.avg_px; // Mark to market with latest fill?
+        position.last_updated_ts = execution.ts_ms;
+
+        Some(position.clone())
+    }
 }

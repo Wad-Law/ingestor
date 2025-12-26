@@ -21,7 +21,8 @@ Built on a modular **Actor System** using `tokio` broadcast channels (The **Bus*
 ### 3. **Quantitative Strategy**
 - **Financial Precision**: Uses `rust_decimal` for all financial calculations (prices, sizes, bankroll) to avoid floating-point errors.
 - **Kelly Criterion**: Dynamic position sizing based on estimated edge and probability.
-- **Risk Management**: Configurable limitations on position sizes and bankroll exposure.
+- **Risk Management**: "Kill Switch" functionality via `RiskActor` which halts trading upon breaching daily loss or drawdown limits.
+- **Position Reconciliation**: Periodic synchronization with the Polymarket Data API to correct internal state drift and remove "zombie" positions.
 
 ## 🛠️ Setup & Configuration
 
@@ -37,6 +38,8 @@ Base configuration for URLs, timeouts, and feed sources. Modify this file to cha
 polymarket:
   baseUrl: "https://api.polymarket.com"
   gammaMarketsUrl: "https://gamma-api.polymarket.com/markets"
+  rpcUrl: "https://polygon-rpc.com"
+  dataApiUrl: "https://data-api.polymarket.com"
 # ...
 ```
 
@@ -76,13 +79,12 @@ cargo test
     - `sim_hash_cache.rs`: Deduplication logic.
     - `kelly.rs`: Position sizing math.
     - `market_index.rs`: Hybrid search index (BM25 + Semantic).
+- `src/risk`: Risk management actor and logic.
 - `src/marketdata`: Market price fetching actors.
-- `src/execution`: Order signing and submission actors.
+- `src/execution`: Order signing, submission, and state reconciliation actors.
 
 ## 🔮 Next Steps
 
-1.  **Persistence Layer**: Implement a database (Postgres/SQLite) to store trade history, signals, and news events for backtesting.
-2.  **Backtesting Engine**: Create a simulation mode to replay historical news and validate strategy performance.
-3.  **Live Monitoring Dashboard**: A TUI or Web UI to monitor active positions, PnL, and system health in real-time.
-4.  **Enhanced Risk Management**: specific limits per market category or correlated assets.
-5.  **Multi-LLM Consensus**: Query multiple models and aggregate scores for higher confidence signals.
+1.  **Backtesting Engine**: Create a simulation mode to replay historical news and validate strategy performance.
+2.  **Live Monitoring Dashboard**: A TUI or Web UI to monitor active positions, PnL, and system health in real-time.
+3.  **Multi-LLM Consensus**: Query multiple models and aggregate scores for higher confidence signals.
