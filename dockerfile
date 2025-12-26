@@ -2,9 +2,6 @@
 FROM rust:1.85 AS build
 WORKDIR /app
 
-# Install build dependencies
-RUN apt-get update && apt-get install -y pkg-config libssl-dev cmake && rm -rf /var/lib/apt/lists/*
-
 # Now copy real source and build
 COPY . .
 RUN cargo build --release

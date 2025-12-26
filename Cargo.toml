@@ -10,7 +10,7 @@ tracing-subscriber = { version = "0.3", features = ["fmt"] }
 async-trait = "0.1.89"
 anyhow = "1.0.100"
 tokio-util = "0.7.17"
-reqwest = { version = "0.12.24", features = ["json"] }
+reqwest = { version = "0.12.24", default-features = false, features = ["json", "rustls-tls"] }
 serde = { version = "1.0.228", features = ["derive"] }
 futures = "0.3.31"
 humantime-serde = "1"
@@ -28,9 +28,9 @@ deunicode = "1.6.2"
 rust-stemmers = "1.2.0"
 aho-corasick = "1.1.4"
 tantivy = "0.22"
-ethers = { version = "2.0.14", features = ["abigen", "ws", "eip712"] }
+ethers = { version = "2.0.14", features = ["abigen", "ws", "eip712", "rustls"] }
 hex = "0.4.3"
 dotenv = "0.15.0"
 fastembed = "5.5.0"
 rust_decimal = { version = "1.36", features = ["serde"] }
-sqlx = { version = "0.7", features = ["postgres", "runtime-tokio", "macros", "chrono", "rust_decimal"] }
+sqlx = { version = "0.7", features = ["postgres", "runtime-tokio-rustls", "macros", "chrono", "rust_decimal"] }
