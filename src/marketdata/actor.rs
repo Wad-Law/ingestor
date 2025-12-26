@@ -84,6 +84,8 @@ mod tests {
     use super::*;
     use crate::bus::types::Bus;
     use crate::config::config::PolyCfg;
+    use crate::marketdata::polymarket::PolyMarketDataClient;
+    use reqwest::Client;
     use std::time::Duration;
 
     fn mock_poly_cfg() -> PolyCfg {
@@ -107,12 +109,13 @@ mod tests {
     #[tokio::test]
     async fn test_market_data_actor_flow() {
         let bus = Bus::new();
-        let client = Client::new();
+        let http_client = Client::new();
         let cfg = mock_poly_cfg();
         let shutdown = CancellationToken::new();
 
-        let actor = MarketPricingActor::new(bus, client, cfg, shutdown);
-        assert_eq!(actor.poly_cfg.gamma_markets_url, "http://localhost/markets");
+        let client = Arc::new(PolyMarketDataClient::new(cfg, http_client));
+        let _actor = MarketPricingActor::new(bus, client, shutdown);
+        // assert_eq!(actor.poly_cfg...) is no longer valid as actor doesn't hold config
     }
 
     #[tokio::test]

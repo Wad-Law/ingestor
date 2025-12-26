@@ -146,6 +146,7 @@ mod tests {
     use super::*;
     use crate::config::config::PolyCfg;
     use crate::core::types::Order;
+    use crate::execution::polymarket::PolyExecutionClient;
     use reqwest::Client;
     use rust_decimal::Decimal;
     use rust_decimal::prelude::FromPrimitive;
@@ -162,7 +163,7 @@ mod tests {
         cfg.api_secret =
             "0000000000000000000000000000000000000000000000000000000000000001".to_string();
         let exec_client = PolyExecutionClient::new(cfg, client);
-        let actor = ExecutionActor::new(bus.clone(), shutdown.clone(), exec_client);
+        let actor = ExecutionActor::new(bus.clone(), shutdown.clone(), Arc::new(exec_client));
 
         // Spawn actor
         tokio::spawn(async move {
