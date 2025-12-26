@@ -5,8 +5,9 @@ Ingestor is a high-performance, event-driven trading bot written in Rust. It is 
 ## 🚀 Key Features
 
 ### 1. **Event-Driven Architecture**
-Built on a modular **Actor System** using `tokio` channels, ensuring low latency and clean separation of concerns:
-- **Discovery**: Fetches news from RSS feeds and other sources.
+Built on a modular **Actor System** using `tokio` broadcast channels (The **Bus**), ensuring low latency and clean separation of concerns:
+- **News Ingestion**: Dedicated actors (`finjuice`, `rss`) for retrieving real-time news from financial feeds and RSS sources.
+- **Discovery**: Responsible for finding and indexing new prediction markets from providers.
 - **Strategy**: Core logic engine (Filtering, Deduplication, Scoring, Sizing).
 - **Market Data**: Retrieves live prices and order books from Gamma/Polymarket APIs.
 - **Execution**: Management of orders via EIP-712 signing and PolyMarket CTF Exchange interaction.
@@ -14,7 +15,7 @@ Built on a modular **Actor System** using `tokio` channels, ensuring low latency
 ### 2. **Advanced NLP Pipeline**
 - **Tokenization**: Custom pipeline with stemming, stopword removal, and n-gram generation (bigrams/trigrams).
 - **SimHash**: Fast locality-sensitive hashing for detecting near-duplicate news events.
-- **BM25 Retrieval**: `tantivy`-based indexing to instantly find relevant prediction markets for breaking news.
+- **Hybrid Search**: Combines **BM25** (keyword matching via `tantivy`) and **Semantic Search** (embeddings via `fastembed`) to instantly find relevant prediction markets for breaking news.
 - **LLM Integration**: Interfaces with LLMs for high-level semantic analysis and probability estimation.
 
 ### 3. **Quantitative Strategy**
@@ -28,18 +29,25 @@ Built on a modular **Actor System** using `tokio` channels, ensuring low latency
 - Rust (latest stable)
 - Node.js (for some auxiliary scripts if needed)
 
-### Environment Variables
-Create a `.env` file in the root directory:
+### Configuration
+
+**1. `config.yml`**
+Base configuration for URLs, timeouts, and feed sources. Modify this file to change Polmarket API endpoints or RSS feeds.
+```yaml
+polymarket:
+  baseUrl: "https://api.polymarket.com"
+  gammaMarketsUrl: "https://gamma-api.polymarket.com/markets"
+# ...
+```
+
+**2. Environment Variables (.env)**
+Sensitive keys should be set in a `.env` file:
 
 ```bash
-# Polymarket / Gamma API
+# Polymarket Credentials
 POLY_API_KEY="your_api_key"
 POLY_API_SECRET="your_api_secret"
 POLY_PASSPHRASE="your_passphrase"
-POLY_GAMMA_MARKETS_URL="https://gamma-api.polymarket.com/markets"
-
-# Strategy Config
-STRATEGY_BANKROLL=1000.0
 
 # LLM Config
 LLM_PROVIDER="openai" # or "anthropic"
@@ -58,13 +66,16 @@ cargo test
 ## 📂 Project Structure
 
 - `src/core`: Shared types and domain definitions (`RawNews`, `Order`, `Signal`).
-- `src/discovery`: Feed fetchers and pollers.
+- `src/bus`: Event bus definitions and channel types.
+- `src/finjuice`: Financial news feed integration.
+- `src/rss`: RSS feed poller actors.
+- `src/discovery`: Market discovery actors.
 - `src/strategy`:
     - `actor.rs`: Main strategy coordination.
     - `tokenization.rs`: NLP processing.
     - `sim_hash_cache.rs`: Deduplication logic.
     - `kelly.rs`: Position sizing math.
-    - `market_index.rs`: BM25 search index.
+    - `market_index.rs`: Hybrid search index (BM25 + Semantic).
 - `src/marketdata`: Market price fetching actors.
 - `src/execution`: Order signing and submission actors.
 

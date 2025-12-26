@@ -232,11 +232,33 @@ impl Default for CalibrationCfg {
 
 impl AppCfg {
     pub fn load(path: &str) -> Result<Self> {
-        let cfg = Config::builder()
+        let mut builder = Config::builder()
             .add_source(File::with_name(path))
-            .add_source(config::Environment::default().separator("__"))
-            .build()
-            .context("building config")?;
+            .add_source(config::Environment::default().separator("__"));
+
+        // Manual overrides for standard environment variables (README compliant)
+        if let Ok(key) = std::env::var("LLM_API_KEY") {
+            builder = builder
+                .set_override("llm.api_key", key)
+                .context("setting LLM_API_KEY")?;
+        }
+        if let Ok(key) = std::env::var("POLY_API_KEY") {
+            builder = builder
+                .set_override("polymarket.api_key", key)
+                .context("setting POLY_API_KEY")?;
+        }
+        if let Ok(secret) = std::env::var("POLY_API_SECRET") {
+            builder = builder
+                .set_override("polymarket.api_secret", secret)
+                .context("setting POLY_API_SECRET")?;
+        }
+        if let Ok(pass) = std::env::var("POLY_PASSPHRASE") {
+            builder = builder
+                .set_override("polymarket.passphrase", pass)
+                .context("setting POLY_PASSPHRASE")?;
+        }
+
+        let cfg = builder.build().context("building config")?;
 
         let app: AppCfg = cfg.try_deserialize().context("deserializing config")?;
         app.validate()?;
