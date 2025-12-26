@@ -1,13 +1,11 @@
 pub mod actor;
-pub mod calibration;
 mod canonical_event;
 mod event_features;
 pub mod exact_duplicate_detector;
 pub mod hard_filters;
+pub mod kelly;
 mod market_index;
 pub mod normalizers;
-pub mod scoring;
 mod sim_hash_cache;
 pub mod tokenization;
 pub mod types;
-pub mod kelly;

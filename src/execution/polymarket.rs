@@ -5,7 +5,10 @@ use ethers::abi::Address;
 use ethers::prelude::*;
 use ethers::signers::{LocalWallet, Signer};
 use ethers::types::U256;
+// use ethers::utils::to_checksum; // Unused
 use reqwest::Client;
+use rust_decimal::Decimal;
+use rust_decimal::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -59,6 +62,7 @@ struct CreateOrderRequest {
 #[derive(Debug, Deserialize)]
 struct CreateOrderResponse {
     #[serde(rename = "orderID")]
+    #[allow(dead_code)]
     order_id: String,
     // other fields...
 }
@@ -115,11 +119,30 @@ impl PolyExecutionClient {
         let decimals = self.cfg.token_decimals;
         let scale = 10u64.pow(decimals) as f64;
 
-        // Convert price and size to U256
-        // Price is usually per unit, Size is number of units.
-        // For USDC (6 decimals), price 0.50 -> 500000
-        let price_f64 = order.price as f64;
-        let size_f64 = order.size as f64;
+        // Create order arguments
+        // Token ID is u256 string
+        let token_id_str = if let Some(tid) = &order.token_id {
+            tid
+        } else {
+            &order.market_id
+        };
+        let _token_id_u256 = U256::from_dec_str(token_id_str).map_err(|e| anyhow::anyhow!(e))?;
+
+        // Price and size to float for Clob/Ethers (simplified, ideally usage specialized libraries)
+        let price_f64 = order
+            .price
+            .to_f64()
+            .ok_or_else(|| anyhow::anyhow!("Invalid price decimal"))?;
+        let size_f64 = order
+            .size
+            .to_f64()
+            .ok_or_else(|| anyhow::anyhow!("Invalid size decimal"))?;
+
+        // Side (Buy vs Sell)
+        let _side = match order.side {
+            Side::Buy => 0,  // BUY
+            Side::Sell => 1, // SELL
+        };
 
         // makerAmount and takerAmount depend on side
         // BUY: maker = USDC (price * size), taker = Asset (size)
@@ -163,7 +186,11 @@ impl PolyExecutionClient {
             maker: maker_address,
             signer: maker_address,
             taker: Address::zero(), // Open order
-            tokenId: U256::from_dec_str(&order.market_id).unwrap_or(U256::zero()), // Market ID must be numeric token ID
+            tokenId: if let Some(tid) = &order.token_id {
+                U256::from_dec_str(tid).unwrap_or(U256::zero())
+            } else {
+                U256::from_dec_str(&order.market_id).unwrap_or(U256::zero())
+            },
             makerAmount: maker_amount,
             takerAmount: taker_amount,
             expiration: U256::from(expiration),
@@ -216,7 +243,7 @@ impl PolyExecutionClient {
             market_id: order.market_id.clone(),
             avg_px: order.price,
             filled: order.size,
-            fee: 0.0,
+            fee: Decimal::ZERO,
             ts_ms: chrono::Utc::now().timestamp_millis(),
         };
 

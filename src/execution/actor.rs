@@ -2,8 +2,9 @@ use crate::bus::types::Bus;
 use crate::core::types::Actor;
 use crate::execution::polymarket::PolyExecutionClient;
 use anyhow::Result;
+// use rust_decimal::Decimal; // Unused
 use tokio_util::sync::CancellationToken;
-use tracing::{error, info};
+use tracing::{error, info}; // warn unused
 
 pub struct ExecutionActor {
     pub bus: Bus,
@@ -50,12 +51,32 @@ impl Actor for ExecutionActor {
                             match self.client.create_order(order).await {
                                 Ok(fill) => {
                                     info!("ExecutionActor executed fill: {:?}", fill);
-                                    if let Err(e) = self.bus.executions.publish(fill).await {
-                                        error!("Failed to publish execution: {:?}", e);
+                                    if let Err(_e) = self.bus.executions.publish(fill).await {
+                                        error!("Failed to execute order: {:?}", _e);
                                     }
                                 }
-                                Err(e) => {
-                                    error!("Failed to execute order: {:?}", e);
+                                Err(_e) => {
+                                    error!("Failed to execute order: {:?}", _e);
+                                    // If execution fails, we still want to publish a "failed" fill (optional, or just log)
+                                    // For now, let's just log as originally intended or use proper Execution struct if needed.
+                                    // The type expected by bus.executions is Execution.
+                                    /*
+                                    let failed_execution = crate::core::types::Execution {
+                                        client_order_id: order.client_order_id.clone(),
+                                        market_id: order.market_id.clone(),
+                                        avg_px: Decimal::ZERO,
+                                        filled: Decimal::ZERO,
+                                        fee: Decimal::ZERO,
+                                        // Execution struct doesn't have 'side' field based on previous view?
+                                        // Let's check core/types.rs content.
+                                        // It has: client_order_id, market_id, avg_px, filled, fee, ts_ms.
+                                        ts_ms: chrono::Utc::now().timestamp_millis(),
+                                    };
+                                    */
+                                    // Actually, if it failed, maybe we shouldn't publish an execution?
+                                    // The original code didn't. Let's revert the "failed fill" addition to avoid complicating types if not strictly required by the plan.
+                                    // But if I want to keep it, I should use Execution.
+                                    // Reverting the "failed fill" logic for now to keep it simple and fix the build.
                                 }
                             }
 
@@ -86,7 +107,9 @@ mod tests {
     use crate::config::config::PolyCfg;
     use crate::core::types::Order;
     use reqwest::Client;
-    use tokio::time::Duration;
+    use rust_decimal::Decimal;
+    use rust_decimal::prelude::FromPrimitive;
+    use tokio::time::Duration; // For from_f64/from_str
 
     #[tokio::test]
     async fn test_execution_actor_flow() {
@@ -116,8 +139,9 @@ mod tests {
         let order = Order {
             client_order_id: "test-123".to_string(),
             market_id: "123456".to_string(),
-            price: 0.5,
-            size: 10.0,
+            token_id: None,
+            price: Decimal::from_f64(0.5).unwrap(),
+            size: Decimal::from_f64(10.0).unwrap(),
             side: crate::core::types::Side::Buy,
         };
         bus.orders.publish(order.clone()).await.unwrap();

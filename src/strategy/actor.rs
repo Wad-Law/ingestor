@@ -3,7 +3,7 @@ use crate::config::config::AppCfg;
 use crate::core::types::{
     Actor, Execution, MarketDataRequest, MarketDataSnap, Order, PolyMarketEvent, RawNews,
 };
-use crate::strategy::calibration::ProbabilityCalibrator;
+use crate::llm::LlmClient;
 use crate::strategy::canonical_event::CanonicalEventBuilder;
 use crate::strategy::event_features::{EventFeatureExtractor, FeatureDictionaries};
 use crate::strategy::exact_duplicate_detector::{
@@ -12,12 +12,13 @@ use crate::strategy::exact_duplicate_detector::{
 use crate::strategy::hard_filters::HardFilterer;
 use crate::strategy::kelly::KellySizer;
 use crate::strategy::market_index::MarketIndex;
-use crate::strategy::scoring::Scorer;
 use crate::strategy::sim_hash_cache::{SimHashCache, SimHashCacheConfig};
 use crate::strategy::tokenization::{TokenizationConfig, TokenizedNews};
 use crate::strategy::types::*;
 use anyhow::Result;
 use chrono::Utc;
+use rust_decimal::Decimal;
+use rust_decimal::prelude::*;
 use std::collections::HashMap;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
@@ -31,11 +32,10 @@ pub struct StrategyActor {
     pub canonical_builder: CanonicalEventBuilder,
     pub market_index: MarketIndex,
     pub hard_filterer: HardFilterer,
-    pub scorer: Scorer,
-    pub calibrator: ProbabilityCalibrator,
     pub kelly_sizer: KellySizer,
     pub market_data_cache: HashMap<String, MarketDataSnap>,
-    pub bankroll: f64,
+    pub bankroll: Decimal,
+    pub llm_client: LlmClient,
 }
 
 impl StrategyActor {
@@ -51,11 +51,10 @@ impl StrategyActor {
             canonical_builder: CanonicalEventBuilder::new(),
             market_index: MarketIndex::new().expect("Failed to initialize MarketIndex"),
             hard_filterer: HardFilterer::new(),
-            scorer: Scorer::new(),
-            calibrator: ProbabilityCalibrator::new(cfg.strategy.calibration.clone()),
             kelly_sizer: KellySizer::default(),
             market_data_cache: HashMap::new(),
-            bankroll: cfg.strategy.bankroll,
+            bankroll: Decimal::from_f64(cfg.strategy.bankroll).unwrap_or(Decimal::ZERO),
+            llm_client: LlmClient::new(cfg.llm.clone()),
         }
     }
 
@@ -123,8 +122,9 @@ impl StrategyActor {
         let feat = self.event_feature_extractor.extract(&tokenized_news, now); // Lexical layer (layers, numbers, time window)
         let _canonical = self.canonical_builder.build(&tokenized_news, &feat); // semantic layer (domain, event kind, primary/secondary entities, number interpretation, location, semantic time window)
 
-        // 4. Candidate generation with BM25
-        let raw_candidates = self.retrieve_candidates_bm25(tokenized_news.tokens.as_slice());
+        // 4. Candidate generation with Hybrid Search (BM25 + Semantic)
+        let raw_candidates =
+            self.retrieve_candidates(tokenized_news.tokens.as_slice(), &raw_news.title);
 
         // 5. Hard filters to kill false positives
         let entities = &feat.entities;
@@ -133,41 +133,121 @@ impl StrategyActor {
             .hard_filterer
             .apply(raw_candidates, entities, time_window);
 
-        // 6. Heuristic scoring (bm25_norm, entity_overlap, numbers, liquidity, etc.)
-        let scored_candidates = self.scorer.score(filtered_candidates, &feat);
+        // 6. LLM Scoring
+        // 6. LLM Scoring
+        let mut edged_candidates = Vec::new();
 
-        // 7. Top-K with diversity (MMR or similar)
-        let top_k = self.scorer.select_top_k(scored_candidates);
+        // Take top N candidates for LLM analysis to save costs
+        let top_candidates = filtered_candidates.into_iter().take(5).collect::<Vec<_>>();
 
-        // 8. Turn Top-K score into probability (logistic calibration + shrinkage)
-        let probed = self.calibrator.map_scores_to_probabilities(top_k);
+        // Ensure we have market data (Price + Question) for these candidates
+        self.ensure_market_data(&top_candidates).await;
 
-        // 9. Compare belief vs market price (edge computation)
-        // Ensure that we have marketdata for each probed candidate
-        self.ensure_market_data(&probed).await;
-        let with_edge = self.attach_edges_vs_market(probed);
+        for candidate in top_candidates {
+            // Retrieve market question/title from index or cache (simplified here using candidate data if available)
+            // We need the market question. The candidate has market_id.
+            // We can try to get it from market_data_cache if available, or we might need to store it in the index.
+            // For now, let's assume we can get it from the cache or it's part of the candidate metadata (which it isn't yet).
+            // Fallback: use a placeholder or skip if missing.
 
-        // 10. Position Sizing (Kelly Criterion)
-        let decisions = self.kelly_sizer.size_positions(with_edge);
+            // In a real implementation, we'd fetch the market title from a MarketStore.
+            // Let's assume we have it in market_data_cache for now.
+            let market_question =
+                if let Some(snap) = self.market_data_cache.get(&candidate.market_id) {
+                    snap.question.clone()
+                } else {
+                    "Unknown Market Question".to_string()
+                };
 
-        // 11. Build actual orders
-        self.build_orders_from_sized_decisions(&decisions)
-    }
+            // Call LLM
+            match self
+                .llm_client
+                .analyze(&raw_news.title, &market_question)
+                .await
+            {
+                Ok(signal) => {
+                    info!("LLM Signal for {}: {:?}", candidate.market_id, signal);
 
-    fn retrieve_candidates_bm25(&self, tokens: &[String]) -> Vec<RawCandidate> {
-        match self.market_index.search(tokens, 100) {
-            Ok(results) => results,
-            Err(e) => {
-                error!("BM25 search failed: {}", e);
-                Vec::new()
+                    // Convert signal to TradeSide and Probability
+                    let (_side, prob) = match signal.sentiment.as_str() {
+                        "Positive" => (
+                            TradeSide::BuyYes,
+                            Decimal::from_f64(0.5 + (signal.confidence * 0.5))
+                                .unwrap_or(Decimal::new(5, 1)),
+                        ),
+                        "Negative" => (
+                            TradeSide::BuyNo,
+                            Decimal::from_f64(0.5 + (signal.confidence * 0.5))
+                                .unwrap_or(Decimal::new(5, 1)),
+                        ),
+                        _ => (TradeSide::BuyYes, Decimal::new(5, 1)), // Neutral 0.5
+                    };
+
+                    // Get market price
+                    let market_price =
+                        if let Some(snap) = self.market_data_cache.get(&candidate.market_id) {
+                            (snap.best_bid + snap.best_ask) / Decimal::new(2, 0)
+                        } else {
+                            Decimal::new(5, 1) // 0.5
+                        };
+
+                    if prob > Decimal::new(6, 1) {
+                        // Threshold 0.6
+                        let edged = EdgedCandidate {
+                            candidate,
+                            score: prob,
+                            probability: prob,
+                            market_price,
+                            edge: prob - market_price,
+                        };
+                        edged_candidates.push(edged);
+                    }
+                }
+                Err(e) => {
+                    error!("LLM analysis failed for {}: {:?}", candidate.market_id, e);
+                }
             }
         }
+
+        // 7. Kelly Sizing
+        let sized_decisions = self.kelly_sizer.size_positions(edged_candidates);
+
+        // 8. Build Orders
+        self.build_orders_from_sized_decisions(&sized_decisions)
     }
 
-    async fn ensure_market_data(&mut self, candidates: &[ProbabilisticCandidate]) {
+    fn retrieve_candidates(&mut self, tokens: &[String], raw_text: &str) -> Vec<RawCandidate> {
+        let mut candidates = HashMap::new();
+
+        // 1. BM25 Search
+        if let Ok(results) = self.market_index.search(tokens, 50) {
+            for c in results {
+                candidates.insert(c.market_id.clone(), c);
+            }
+        } else {
+            warn!("BM25 search failed");
+        }
+
+        // 2. Semantic Search
+        if let Ok(results) = self.market_index.search_semantic(raw_text, 50) {
+            for c in results {
+                // If exists, we could merge scores or keep the one with higher score.
+                // For now, just insert if not present (union).
+                // Or maybe we want to boost score if found in both?
+                // Let's just add unique ones.
+                candidates.entry(c.market_id.clone()).or_insert(c);
+            }
+        } else {
+            warn!("Semantic search failed");
+        }
+
+        candidates.into_values().collect()
+    }
+
+    async fn ensure_market_data(&mut self, candidates: &[RawCandidate]) {
         let missing_ids: Vec<String> = candidates
             .iter()
-            .map(|c| c.candidate.market_id.clone())
+            .map(|c| c.market_id.clone())
             .filter(|id| !self.market_data_cache.contains_key(id))
             .collect();
 
@@ -212,53 +292,25 @@ impl StrategyActor {
         }
     }
 
-    fn attach_edges_vs_market(
-        &self,
-        candidates: Vec<ProbabilisticCandidate>,
-    ) -> Vec<EdgedCandidate> {
-        let mut results = Vec::new();
-        for c in candidates {
-            if let Some(snap) = self.market_data_cache.get(&c.candidate.market_id) {
-                // Simple mid-price for now
-                let mid = (snap.best_bid + snap.best_ask) / 2.0;
-                // If bid/ask are 0, ignore
-                if mid <= 0.0 {
-                    continue;
-                }
-                let market_price = mid as f64;
-                let edge = c.probability - market_price;
-
-                results.push(EdgedCandidate {
-                    candidate: c.candidate,
-                    score: c.score,
-                    probability: c.probability,
-                    market_price,
-                    edge,
-                });
-            }
-        }
-        results
-    }
-
     fn build_orders_from_sized_decisions(&self, sized: &[SizedDecision]) -> Vec<Order> {
         let mut orders = Vec::new();
         // Use configured bankroll
         let bankroll = self.bankroll;
 
         for decision in sized {
-            if decision.size_fraction <= 0.0 {
+            if decision.size_fraction <= Decimal::ZERO {
                 continue;
             }
 
             // Calculate quantity based on bankroll and price
             // size_fraction is the fraction of bankroll to risk/invest
             // quantity = (bankroll * size_fraction) / price
-            let price = decision.candidate.market_price as f32;
-            if price <= 0.0 {
+            let price = decision.candidate.market_price;
+            if price <= Decimal::ZERO {
                 continue;
             }
 
-            let quantity = (bankroll * decision.size_fraction) as f32 / price;
+            let quantity = (bankroll * decision.size_fraction) / price;
 
             // Generate a simple client order ID
             let client_order_id = format!(
@@ -267,23 +319,37 @@ impl StrategyActor {
                 Utc::now().timestamp_micros()
             );
 
+            // Resolve token_id
+            let mut token_id = None;
+            if let Some(snap) = self
+                .market_data_cache
+                .get(&decision.candidate.candidate.market_id)
+            {
+                if let Some(tokens) = &snap.tokens {
+                    let target_outcome = match decision.side {
+                        TradeSide::BuyYes => "Yes",
+                        TradeSide::BuyNo => "No",
+                    };
+                    // Case-insensitive match just in case
+                    if let Some(t) = tokens
+                        .iter()
+                        .find(|t| t.outcome.eq_ignore_ascii_case(target_outcome))
+                    {
+                        token_id = Some(t.token_id.clone());
+                    } else {
+                        warn!(
+                            "Token ID not found for outcome {} in market {}",
+                            target_outcome, decision.candidate.candidate.market_id
+                        );
+                    }
+                }
+            }
+
             let order = Order {
                 client_order_id,
                 market_id: decision.candidate.candidate.market_id.clone(),
-                side: match decision.side {
-                    TradeSide::BuyYes => crate::core::types::Side::Buy,
-                    TradeSide::BuyNo => crate::core::types::Side::Buy, // Assuming BuyNo is buying "No" shares, which is still a Buy order but for a different token?
-                                                                       // Wait, Polymarket usually has separate tokens for Yes and No.
-                                                                       // If we are buying "No", we are buying the "No" token.
-                                                                       // So it's always a Buy side order, but the tokenId differs.
-                                                                       // However, our Order struct only has market_id.
-                                                                       // We need to resolve the correct tokenId for Yes vs No.
-                                                                       // For now, let's assume market_id IS the token_id we want to buy.
-                                                                       // If TradeSide::BuyNo, we should have selected the "No" token ID as the candidate.
-                                                                       // But candidate.market_id usually refers to the market, not the specific outcome token.
-                                                                       // This is a logic gap.
-                                                                       // For this refactor, I will map both to Side::Buy.
-                },
+                token_id,
+                side: crate::core::types::Side::Buy, // Always Buy side for the specific token
                 price,
                 size: quantity,
             };
@@ -311,7 +377,7 @@ impl StrategyActor {
         self.handle_news_event(news).await.into_iter().next()
     }
 
-    fn decide_from_poly_event(&mut self, _event: &PolyMarketEvent) -> Option<Order> {
+    fn decide_from_poly_event(&mut self, event: &PolyMarketEvent) -> Option<Order> {
         // Structural/reactive logic:
         // - reindex market if needed
         // - update cached metadata
@@ -332,20 +398,30 @@ impl StrategyActor {
         // - risk/execution adjustment logic
 
         // Update index if it's a market update/creation
-        // Assuming PolyMarketEvent has fields like market_id, title, etc.
-        // For now, we'll assume we can extract them.
-        // Note: The actual PolyMarketEvent struct definition isn't fully visible here,
-        // so I'm making a best-effort integration based on typical patterns.
+        // Update index if it's a market update/creation
+        if let Some(markets) = &event.markets {
+            for market in markets {
+                let question = market
+                    .question
+                    .as_deref()
+                    .or(event.title.as_deref())
+                    .unwrap_or("");
+                let description = market
+                    .description
+                    .as_deref()
+                    .or(event.description.as_deref())
+                    .unwrap_or("");
 
-        // Example logic:
-        // if let Some(market) = &event.market {
-        //     if let Err(e) = self.market_index.add_market(&market.id, &market.title, &market.description, &market.tags) {
-        //         error!("Failed to index market {}: {}", market.id, e);
-        //     }
-        // }
-
-        // Since I don't see the PolyMarketEvent fields in the context, I'll leave a TODO with the intent.
-        // TODO: Extract market details from event and call self.market_index.add_market(...)
+                if !question.is_empty() {
+                    if let Err(e) =
+                        self.market_index
+                            .add_market(&market.id, question, description, "", None)
+                    {
+                        error!("Failed to index market {}: {}", market.id, e);
+                    }
+                }
+            }
+        }
         None
     }
 
@@ -458,5 +534,108 @@ impl Actor for StrategyActor {
         }
         info!("StrategyActor stopped cleanly");
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    // use crate::config::config::CalibrationCfg;
+    use crate::core::types::MarketToken;
+    use crate::strategy::exact_duplicate_detector::ExactDuplicateDetectorConfig;
+    use crate::strategy::sim_hash_cache::SimHashCacheConfig;
+    use crate::strategy::types::{EdgedCandidate, RawCandidate, SizedDecision, TradeSide};
+
+    #[test]
+    fn test_token_id_resolution() {
+        // Setup minimal actor
+        let mut actor = StrategyActor {
+            bus: Bus::new(),
+            shutdown: CancellationToken::new(),
+            detector: ExactDuplicateDetector::new(ExactDuplicateDetectorConfig::default()),
+            sim_hash_cache: SimHashCache::new(SimHashCacheConfig::default()),
+            event_feature_extractor: EventFeatureExtractor::new(
+                FeatureDictionaries::default_minimal(),
+            ),
+            canonical_builder: CanonicalEventBuilder::new(),
+            market_index: MarketIndex::new().unwrap(),
+            hard_filterer: HardFilterer::new(),
+            // scorer: Scorer::new(),
+            // calibrator: ProbabilityCalibrator::new(CalibrationCfg::default()),
+            kelly_sizer: KellySizer::default(),
+            market_data_cache: HashMap::new(),
+            bankroll: Decimal::from_f64(1000.0).unwrap(),
+            llm_client: LlmClient::new(crate::config::config::LlmCfg::default()),
+        };
+
+        // Mock Market Data
+        let market_id = "123456";
+        let yes_token = "token_yes_123";
+        let no_token = "token_no_123";
+
+        let snap = MarketDataSnap {
+            market_id: market_id.to_string(),
+            book_ts_ms: 0,
+            best_bid: Decimal::new(5, 1),   // 0.5
+            best_ask: Decimal::new(6, 1),   // 0.6
+            bid_size: Decimal::new(100, 0), // 100.0
+            ask_size: Decimal::new(100, 0), // 100.0
+            tokens: Some(vec![
+                MarketToken {
+                    token_id: yes_token.to_string(),
+                    outcome: "Yes".to_string(),
+                    price: Decimal::new(55, 2), // 0.55
+                },
+                MarketToken {
+                    token_id: no_token.to_string(),
+                    outcome: "No".to_string(),
+                    price: Decimal::new(45, 2), // 0.45
+                },
+            ]),
+            question: "Will the Fed hike rates?".to_string(),
+        };
+        actor.market_data_cache.insert(market_id.to_string(), snap);
+
+        // Test BuyYes
+        let decision_yes = SizedDecision {
+            candidate: EdgedCandidate {
+                candidate: RawCandidate {
+                    market_id: market_id.to_string(),
+                    ..Default::default()
+                },
+                score: Decimal::new(8, 1),         // 0.8
+                probability: Decimal::new(7, 1),   // 0.7
+                market_price: Decimal::new(55, 2), // 0.55
+                edge: Decimal::new(15, 2),         // 0.15
+            },
+            kelly_fraction: Decimal::new(1, 1), // 0.1
+            size_fraction: Decimal::new(1, 1),  // 0.1
+            side: TradeSide::BuyYes,
+        };
+
+        let orders_yes = actor.build_orders_from_sized_decisions(&[decision_yes]);
+        assert_eq!(orders_yes.len(), 1);
+        assert_eq!(orders_yes[0].token_id, Some(yes_token.to_string()));
+
+        // Test BuyNo
+        let decision_no = SizedDecision {
+            candidate: EdgedCandidate {
+                candidate: RawCandidate {
+                    market_id: market_id.to_string(),
+                    ..Default::default()
+                },
+                score: Decimal::new(8, 1),         // 0.8
+                probability: Decimal::new(3, 1),   // 0.3
+                market_price: Decimal::new(45, 2), // 0.45
+                edge: Decimal::new(15, 2),         // 0.15
+            },
+            kelly_fraction: Decimal::new(1, 1), // 0.1
+            size_fraction: Decimal::new(1, 1),  // 0.1
+            side: TradeSide::BuyNo,
+        };
+
+        let orders_no = actor.build_orders_from_sized_decisions(&[decision_no]);
+        assert_eq!(orders_no.len(), 1);
+        assert_eq!(orders_no[0].token_id, Some(no_token.to_string()));
     }
 }

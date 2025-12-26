@@ -12,6 +12,40 @@ pub struct AppCfg {
     pub financial_juice: FinJuiceCfg,
     #[serde(default)]
     pub strategy: StrategyCfg,
+    #[serde(default)]
+    pub llm: LlmCfg,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct LlmCfg {
+    #[serde(default = "default_llm_api_key")]
+    pub api_key: String,
+    #[serde(default = "default_llm_model")]
+    pub model: String,
+    #[serde(default = "default_llm_base_url")]
+    pub base_url: String,
+}
+
+impl Default for LlmCfg {
+    fn default() -> Self {
+        Self {
+            api_key: default_llm_api_key(),
+            model: default_llm_model(),
+            base_url: default_llm_base_url(),
+        }
+    }
+}
+
+fn default_llm_api_key() -> String {
+    "".to_string()
+}
+
+fn default_llm_model() -> String {
+    "gpt-4o-mini".to_string()
+}
+
+fn default_llm_base_url() -> String {
+    "https://api.openai.com/v1".to_string()
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -62,8 +96,10 @@ pub struct PolyCfg {
     #[serde(rename = "pageLimit", default = "default_page_limit")]
     pub page_limit: u32,
     #[serde(default)]
+    #[allow(dead_code)]
     pub ascending: bool,
     #[serde(rename = "includeClosed", default)]
+    #[allow(dead_code)]
     pub include_closed: bool,
     #[serde(default)]
     pub api_key: String,
@@ -104,6 +140,7 @@ pub struct RssFeedCfg {
     pub id: String,
     pub url: String,
     #[serde(default)]
+    #[allow(dead_code)]
     pub lang: String,
 }
 
@@ -144,6 +181,7 @@ pub struct FinJuiceCfg {
     #[serde(rename = "altUrl")]
     pub alt_url: String,
     pub info: String,
+    #[allow(dead_code)]
     pub cookie: String,
 }
 
@@ -162,6 +200,7 @@ impl Default for FinJuiceCfg {
 #[derive(Debug, Deserialize, Clone, Default)]
 pub struct StrategyCfg {
     #[serde(default)]
+    #[allow(dead_code)]
     pub calibration: CalibrationCfg,
     #[serde(default = "default_bankroll")]
     pub bankroll: f64,
@@ -173,8 +212,11 @@ fn default_bankroll() -> f64 {
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct CalibrationCfg {
+    #[allow(dead_code)]
     pub a: f64,
+    #[allow(dead_code)]
     pub b: f64,
+    #[allow(dead_code)]
     pub lambda: f64,
 }
 

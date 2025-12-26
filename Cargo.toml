@@ -31,3 +31,5 @@ tantivy = "0.22"
 ethers = { version = "2.0.14", features = ["abigen", "ws", "eip712"] }
 hex = "0.4.3"
 dotenv = "0.15.0"
+fastembed = "5.5.0"
+rust_decimal = { version = "1.36", features = ["serde"] }

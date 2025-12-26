@@ -8,20 +8,20 @@ use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
 
-pub struct PolyActor {
+pub struct MarketDiscoveryActor {
     pub bus: Bus,
     pub client: Client,
     pub poly_cfg: PolyCfg,
     pub shutdown: CancellationToken,
 }
 
-impl PolyActor {
+impl MarketDiscoveryActor {
     pub fn new(
         bus: Bus,
         client: Client,
         poly_cfg: PolyCfg,
         shutdown: CancellationToken,
-    ) -> PolyActor {
+    ) -> MarketDiscoveryActor {
         Self {
             bus,
             client,
@@ -76,9 +76,10 @@ impl PolyActor {
 }
 
 #[async_trait::async_trait]
-impl Actor for PolyActor {
+#[async_trait::async_trait]
+impl Actor for MarketDiscoveryActor {
     async fn run(mut self) -> Result<()> {
-        info!("PolyActor started");
+        info!("MarketDiscoveryActor started");
 
         // throttle the loop
         let mut tick = tokio::time::interval(self.poly_cfg.market_list_refresh); // refresh cadence

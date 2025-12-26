@@ -1,10 +1,11 @@
 mod bus;
 mod config;
 mod core;
+mod discovery;
 mod execution;
 mod finjuice;
+mod llm;
 mod marketdata;
-mod polymarket;
 mod rss;
 mod strategy;
 
@@ -12,11 +13,11 @@ use anyhow::Result;
 use bus::types::Bus;
 use config::config::AppCfg;
 use core::types::Actor;
+use discovery::actor::MarketDiscoveryActor;
 use execution::actor::ExecutionActor;
 use execution::polymarket::PolyExecutionClient;
 use finjuice::actor::FinJuiceActor;
-use marketdata::actor::MarketDataActor;
-use polymarket::actor::PolyActor;
+use marketdata::actor::MarketPricingActor;
 use reqwest::Client;
 use rss::actor::RssActor;
 
@@ -58,7 +59,7 @@ async fn main() -> Result<()> {
         .expect("client");
 
     info!("Building actors");
-    let poly = PolyActor::new(
+    let poly = MarketDiscoveryActor::new(
         bus.clone(),
         client.clone(),
         cfg.polymarket.clone(),
@@ -76,7 +77,7 @@ async fn main() -> Result<()> {
         cfg.financial_juice.clone(),
         shutdown.clone(),
     );
-    let market_data = MarketDataActor::new(
+    let market_data = MarketPricingActor::new(
         bus.clone(),
         client.clone(),
         cfg.polymarket.clone(),

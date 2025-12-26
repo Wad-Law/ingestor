@@ -28,6 +28,7 @@ pub enum EventKind {
     PollUpdate,
     PolicyAnnouncement,
     ConflictOrWar,
+    #[allow(dead_code)]
     TreatyOrDeal,
 
     // Macro / economy / finance / crypto
@@ -58,6 +59,7 @@ pub enum EventKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EntityRole {
     PrimaryActor,
+    #[allow(dead_code)]
     Counterparty,
     Jurisdiction,
     Instrument,
@@ -67,8 +69,11 @@ pub enum EntityRole {
 
 #[derive(Debug, Clone)]
 pub struct CanonicalEntity {
+    #[allow(dead_code)]
     pub role: EntityRole,
+    #[allow(dead_code)]
     pub kind: EntityKind,
+    #[allow(dead_code)]
     pub value: String,
 }
 
@@ -85,20 +90,31 @@ pub enum NumberKind {
 
 #[derive(Debug, Clone)]
 pub struct NumberFeature {
+    #[allow(dead_code)]
     pub kind: NumberKind,
+    #[allow(dead_code)]
     pub raw: String,
+    #[allow(dead_code)]
     pub value: f64,
+    #[allow(dead_code)]
     pub unit: Option<String>,
 }
 
 #[derive(Debug, Clone)]
 pub struct CanonicalEvent {
+    #[allow(dead_code)]
     pub domain: EventDomain,
+    #[allow(dead_code)]
     pub kind: EventKind,
+    #[allow(dead_code)]
     pub primary_entities: Vec<CanonicalEntity>,
+    #[allow(dead_code)]
     pub secondary_entities: Vec<CanonicalEntity>,
+    #[allow(dead_code)]
     pub numbers: Vec<NumberFeature>,
+    #[allow(dead_code)]
     pub time_window: Option<TimeWindow>,
+    #[allow(dead_code)]
     pub location: Option<String>, // country / league / region
 }
 
@@ -117,24 +133,34 @@ impl Default for CanonicalDictionaries {
     fn default() -> Self {
         Self {
             macro_keywords: vec![
-                "inflation", "cpi", "gdp", "unemployment",
-                "payrolls", "pmi", "rates", "interest rate",
+                "inflation",
+                "cpi",
+                "gdp",
+                "unemployment",
+                "payrolls",
+                "pmi",
+                "rates",
+                "interest rate",
             ],
-            crypto_keywords: vec![
-                "bitcoin", "btc", "ether", "eth", "crypto",
-            ],
-            political_keywords: vec![
-                "election", "vote", "poll", "runoff", "ballot", "campaign",
-            ],
+            crypto_keywords: vec!["bitcoin", "btc", "ether", "eth", "crypto"],
+            political_keywords: vec!["election", "vote", "poll", "runoff", "ballot", "campaign"],
             sports_keywords: vec![
-                "defeats", "beats", "wins", "loses", "draw",
-                "final", "semifinal", "quarterfinal",
-                "match", "game", "score", "tournament",
+                "defeats",
+                "beats",
+                "wins",
+                "loses",
+                "draw",
+                "final",
+                "semifinal",
+                "quarterfinal",
+                "match",
+                "game",
+                "score",
+                "tournament",
             ],
             entertainment_keywords: vec![
-                "album", "single", "movie", "film", "series", "season",
-                "tour", "concert", "oscars", "emmys", "grammys", "award",
-                "premiere", "release", "drops",
+                "album", "single", "movie", "film", "series", "season", "tour", "concert",
+                "oscars", "emmys", "grammys", "award", "premiere", "release", "drops",
             ],
         }
     }
@@ -152,6 +178,7 @@ impl CanonicalEventBuilder {
         }
     }
 
+    #[allow(dead_code)]
     pub fn with_dict(dict: CanonicalDictionaries) -> Self {
         Self { dict }
     }
@@ -186,7 +213,11 @@ impl CanonicalEventBuilder {
             .any(|e| matches!(e.kind, EntityKind::CentralBank));
 
         let has_macro_kw = self.dict.macro_keywords.iter().any(|kw| lower.contains(kw));
-        let has_crypto_kw = self.dict.crypto_keywords.iter().any(|kw| lower.contains(kw));
+        let has_crypto_kw = self
+            .dict
+            .crypto_keywords
+            .iter()
+            .any(|kw| lower.contains(kw));
 
         if has_crypto_kw {
             return EventDomain::Crypto;
@@ -195,7 +226,11 @@ impl CanonicalEventBuilder {
             return EventDomain::MacroEconomy;
         }
 
-        let has_politics_kw = self.dict.political_keywords.iter().any(|kw| lower.contains(kw));
+        let has_politics_kw = self
+            .dict
+            .political_keywords
+            .iter()
+            .any(|kw| lower.contains(kw));
         let has_person = feat
             .entities
             .iter()
@@ -204,7 +239,11 @@ impl CanonicalEventBuilder {
             return EventDomain::Politics;
         }
 
-        let has_sports_kw = self.dict.sports_keywords.iter().any(|kw| lower.contains(kw));
+        let has_sports_kw = self
+            .dict
+            .sports_keywords
+            .iter()
+            .any(|kw| lower.contains(kw));
         let has_team = feat
             .entities
             .iter()
@@ -213,7 +252,11 @@ impl CanonicalEventBuilder {
             return EventDomain::Sports;
         }
 
-        let has_ent_kw = self.dict.entertainment_keywords.iter().any(|kw| lower.contains(kw));
+        let has_ent_kw = self
+            .dict
+            .entertainment_keywords
+            .iter()
+            .any(|kw| lower.contains(kw));
         let has_celebrity = feat
             .entities
             .iter()
@@ -222,9 +265,10 @@ impl CanonicalEventBuilder {
             return EventDomain::Entertainment;
         }
 
-        let has_ticker_or_company = feat.entities.iter().any(|e| {
-            matches!(e.kind, EntityKind::Ticker | EntityKind::Company)
-        });
+        let has_ticker_or_company = feat
+            .entities
+            .iter()
+            .any(|e| matches!(e.kind, EntityKind::Ticker | EntityKind::Company));
         if has_ticker_or_company {
             return EventDomain::Finance;
         }
@@ -297,10 +341,7 @@ impl CanonicalEventBuilder {
                 {
                     return EventKind::PolicyAnnouncement;
                 }
-                if lower.contains("attack")
-                    || lower.contains("invasion")
-                    || lower.contains("war")
-                {
+                if lower.contains("attack") || lower.contains("invasion") || lower.contains("war") {
                     return EventKind::ConflictOrWar;
                 }
                 EventKind::Other
@@ -370,22 +411,20 @@ impl CanonicalEventBuilder {
 
         for e in entities {
             let role = match (domain, e.kind) {
-                (EventDomain::MacroEconomy | EventDomain::Finance | EventDomain::Crypto, EntityKind::CentralBank) =>
-                    EntityRole::PrimaryActor,
-                (EventDomain::MacroEconomy | EventDomain::Finance | EventDomain::Crypto, EntityKind::Ticker) =>
-                    EntityRole::Instrument,
-                (EventDomain::Politics, EntityKind::Person) =>
-                    EntityRole::PrimaryActor,
-                (EventDomain::Politics, EntityKind::Organization) =>
-                    EntityRole::Organization,
-                (EventDomain::Sports, EntityKind::SportsTeam) =>
-                    EntityRole::PrimaryActor,
-                (EventDomain::Sports, EntityKind::League) =>
-                    EntityRole::Organization,
-                (EventDomain::Entertainment, EntityKind::Celebrity) =>
-                    EntityRole::PrimaryActor,
-                (EventDomain::Entertainment, EntityKind::Organization) =>
-                    EntityRole::Organization,
+                (
+                    EventDomain::MacroEconomy | EventDomain::Finance | EventDomain::Crypto,
+                    EntityKind::CentralBank,
+                ) => EntityRole::PrimaryActor,
+                (
+                    EventDomain::MacroEconomy | EventDomain::Finance | EventDomain::Crypto,
+                    EntityKind::Ticker,
+                ) => EntityRole::Instrument,
+                (EventDomain::Politics, EntityKind::Person) => EntityRole::PrimaryActor,
+                (EventDomain::Politics, EntityKind::Organization) => EntityRole::Organization,
+                (EventDomain::Sports, EntityKind::SportsTeam) => EntityRole::PrimaryActor,
+                (EventDomain::Sports, EntityKind::League) => EntityRole::Organization,
+                (EventDomain::Entertainment, EntityKind::Celebrity) => EntityRole::PrimaryActor,
+                (EventDomain::Entertainment, EntityKind::Organization) => EntityRole::Organization,
                 (_, EntityKind::Country) => {
                     location = Some(e.value.clone());
                     EntityRole::Jurisdiction
@@ -400,8 +439,9 @@ impl CanonicalEventBuilder {
             };
 
             match role {
-                EntityRole::PrimaryActor | EntityRole::Instrument | EntityRole::Jurisdiction =>
-                    primary.push(ce),
+                EntityRole::PrimaryActor | EntityRole::Instrument | EntityRole::Jurisdiction => {
+                    primary.push(ce)
+                }
                 _ => secondary.push(ce),
             }
         }
@@ -428,12 +468,7 @@ impl CanonicalEventBuilder {
             .collect()
     }
 
-    fn classify_number(
-        &self,
-        domain: EventDomain,
-        n: &NumberToken,
-        lower: &str,
-    ) -> NumberKind {
+    fn classify_number(&self, domain: EventDomain, n: &NumberToken, lower: &str) -> NumberKind {
         match domain {
             EventDomain::MacroEconomy | EventDomain::Finance | EventDomain::Crypto => {
                 if let Some(unit) = &n.unit {

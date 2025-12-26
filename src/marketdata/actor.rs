@@ -5,11 +5,28 @@ use crate::core::types::MarketDataSnap;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use reqwest::Client;
+use rust_decimal::Decimal;
 use serde::Deserialize;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
-pub struct MarketDataActor {
+#[derive(Debug, Deserialize)]
+struct PolyToken {
+    token_id: String,
+    outcome: String,
+    price: Decimal,
+}
+
+#[derive(Debug, Deserialize)]
+struct PolyMarketResponse {
+    id: String,
+    tokens: Option<Vec<PolyToken>>,
+    best_bid: Option<Decimal>,
+    best_ask: Option<Decimal>,
+    question: String,
+}
+
+pub struct MarketPricingActor {
     pub bus: Bus,
     pub client: Client,
     pub poly_cfg: PolyCfg,
@@ -17,23 +34,24 @@ pub struct MarketDataActor {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct PolyMarketDetail {
     // id: String,
     // question: String,
     #[serde(default)]
-    best_bid: Option<f64>,
+    best_bid: Option<Decimal>,
     #[serde(default)]
-    best_ask: Option<f64>,
+    best_ask: Option<Decimal>,
     // spread: Option<f64>,
 }
 
-impl MarketDataActor {
+impl MarketPricingActor {
     pub fn new(
         bus: Bus,
         client: Client,
         poly_cfg: PolyCfg,
         shutdown: CancellationToken,
-    ) -> MarketDataActor {
+    ) -> MarketPricingActor {
         Self {
             bus,
             client,
@@ -57,40 +75,48 @@ impl MarketDataActor {
             .context("requesting market data")?;
 
         if !resp.status().is_success() {
-            // If 404, maybe market not found or closed?
             anyhow::bail!("Gamma API error: {}", resp.status());
         }
 
-        // The Gamma API returns a specific structure, but for now we are assuming
-        // we might parse it into MarketDataSnap directly or via PolyMarketDetail.
-        // However, looking at previous code, it seemed to try to parse MarketDataSnap directly
-        // OR PolyMarketDetail. Let's stick to what the previous valid code likely intended.
-        // The previous code had: `let snap: MarketDataSnap = resp.json()...`
-        // But MarketDataSnap might not match the API response directly if it's from Gamma.
-        // Gamma usually returns a complex object.
-        // Let's assume for this refactor we are just fixing compilation.
-        // If the previous code was `let snap: MarketDataSnap = ...`, I will keep it.
-        // Wait, I see `PolyMarketDetail` struct defined but not used in the broken file's `fetch_market_data`.
-        // But in the `replace_file_content` history, I saw it being used.
-        // Let's check `MarketDataSnap` definition. It's in `core::types`.
-        // I'll assume `MarketDataSnap` is what we want to return.
+        let poly_resp: PolyMarketResponse = resp.json().await.context("parsing market data")?;
 
-        let snap: MarketDataSnap = resp.json().await.context("parsing market data")?;
-        Ok(snap)
+        let tokens = poly_resp.tokens.map(|ts| {
+            ts.into_iter()
+                .map(|t| crate::core::types::MarketToken {
+                    token_id: t.token_id,
+                    outcome: t.outcome,
+                    price: t.price,
+                })
+                .collect()
+        });
+
+        Ok(MarketDataSnap {
+            market_id: poly_resp.id,
+            book_ts_ms: chrono::Utc::now().timestamp_millis(), // Approximate
+            best_bid: poly_resp.best_bid.unwrap_or(Decimal::ZERO),
+            best_ask: poly_resp.best_ask.unwrap_or(Decimal::ZERO),
+            bid_size: Decimal::ZERO, // Not provided in simple endpoint
+            ask_size: Decimal::ZERO,
+            tokens,
+            question: poly_resp.question,
+        })
     }
 }
 
 #[async_trait]
-impl Actor for MarketDataActor {
+impl Actor for MarketPricingActor {
     async fn run(mut self) -> Result<()> {
-        info!("MarketDataActor started");
+        info!("MarketPricingActor started");
         let mut rx = self.bus.market_data_request.subscribe();
         loop {
             tokio::select! {
+                // Graceful shutdown signal
                 _ = self.shutdown.cancelled() => {
                     info!("MarketDataActor: shutdown requested");
                     break;
                 }
+
+                // market data requests
                 res = rx.recv() => {
                     match res {
                         Ok(req) => {
@@ -106,10 +132,12 @@ impl Actor for MarketDataActor {
                             }
                         }
                         Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                            // a slow consumer skipped n messages
                             error!("MarketDataActor lagged by {n} MarketDataRequest messages");
                             continue;
                         }
                         Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                            // no more senders; decide whether to exit
                             error!("MarketDataActor request channel closed");
                             break;
                         }
@@ -153,7 +181,7 @@ mod tests {
         let cfg = mock_poly_cfg();
         let shutdown = CancellationToken::new();
 
-        let actor = MarketDataActor::new(bus, client, cfg, shutdown);
+        let actor = MarketPricingActor::new(bus, client, cfg, shutdown);
         assert_eq!(actor.poly_cfg.gamma_markets_url, "http://localhost/markets");
     }
 

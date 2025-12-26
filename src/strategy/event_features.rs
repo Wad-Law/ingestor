@@ -17,16 +17,23 @@ use crate::strategy::tokenization::TokenizedNews;
 /// Coarse entity type (domain-agnostic).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum EntityKind {
+    #[allow(dead_code)]
     Person,
+    #[allow(dead_code)]
     Organization,
     Country,
     CentralBank,
     Ticker,
+    #[allow(dead_code)]
     Company,
     MacroConcept,
+    #[allow(dead_code)]
     SportsTeam,
+    #[allow(dead_code)]
     League,
+    #[allow(dead_code)]
     Celebrity,
+    #[allow(dead_code)]
     Other,
 }
 
@@ -39,7 +46,8 @@ pub struct Entity {
 /// Raw numeric token detected in text.
 #[derive(Debug, Clone)]
 pub struct NumberToken {
-    pub raw: String,          // "3.2%", "25bps", "2025"
+    #[allow(dead_code)]
+    pub raw: String, // "3.2%", "25bps", "2025"
     pub value: f64,           // 3.2, 25.0, 2025.0
     pub unit: Option<String>, // "%", "bps", "year", "plain", etc.
 }
@@ -48,6 +56,7 @@ pub struct NumberToken {
 #[derive(Debug, Clone)]
 pub struct TimeWindow {
     pub start: DateTime<Utc>,
+    #[allow(dead_code)]
     pub end: DateTime<Utc>,
 }
 
@@ -156,6 +165,7 @@ impl EventFeatureExtractor {
         }
     }
 
+    #[allow(dead_code)]
     pub fn with_default_dicts() -> Self {
         Self::new(FeatureDictionaries::default_minimal())
     }

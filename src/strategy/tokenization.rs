@@ -42,16 +42,22 @@ impl Default for TokenizationConfig {
 #[derive(Debug, Clone)]
 pub struct TokenizedNews {
     /// Original RawNews (owned).
+    #[allow(dead_code)]
     pub raw: RawNews,
     /// Normalized string (lowercase, URLs removed, deunicoded, whitespace collapsed).
+    #[allow(dead_code)]
     pub normalized: String,
     /// Base tokens extracted from normalized text.
+    #[allow(dead_code)]
     pub tokens: Vec<String>,
     /// Stems of tokens (if enabled; otherwise empty).
+    #[allow(dead_code)]
     pub stemmed_tokens: Vec<String>,
     /// Bigrams (space-joined, e.g. "ecb cuts").
+    #[allow(dead_code)]
     pub bigrams: Vec<String>,
     /// Trigrams (space-joined, e.g. "ecb cuts rates").
+    #[allow(dead_code)]
     pub trigrams: Vec<String>,
 }
 
@@ -127,7 +133,7 @@ fn tokenize_basic(text: &str, cfg: &TokenizationConfig) -> Vec<String> {
                 // generic
                 "the","a","an","of","and","or","to","in","on","for","with","by",
                 "at","from","is","are","was","were","be","this","that","it","as",
-                "will","may","might","could","should",
+                "will","may","might","could","should","over",
                 // Global / General News
                 "breaking", "latest", "update", "exclusive", "report", "reports", "reporting",
                 "live", "video", "watch", "sources", "source", "claim", "claims", "alleged",
@@ -297,6 +303,7 @@ mod tests {
         let mut cfg = TokenizationConfig::default();
         cfg.generate_bigrams = true;
         cfg.generate_trigrams = true;
+        cfg.remove_stopwords = false; // "currency" is a stopword, so disable removal for this test
 
         let raw = make_raw("central bank digital currency");
         let tokenized = TokenizedNews::from_raw(raw, &cfg);

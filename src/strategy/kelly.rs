@@ -1,21 +1,23 @@
 use crate::strategy::types::{EdgedCandidate, SizedDecision, TradeSide};
+use rust_decimal::Decimal;
 
 pub struct KellySizer {
-    kelly_multiplier: f64,
-    max_position_fraction: f64,
+    kelly_multiplier: Decimal,
+    max_position_fraction: Decimal,
 }
 
 impl Default for KellySizer {
     fn default() -> Self {
         Self {
-            kelly_multiplier: 0.5,
-            max_position_fraction: 0.05,
+            kelly_multiplier: Decimal::new(5, 1),      // 0.5
+            max_position_fraction: Decimal::new(5, 2), // 0.05
         }
     }
 }
 
 impl KellySizer {
-    pub fn new(kelly_multiplier: f64, max_position_fraction: f64) -> Self {
+    #[allow(dead_code)]
+    pub fn new(kelly_multiplier: Decimal, max_position_fraction: Decimal) -> Self {
         Self {
             kelly_multiplier,
             max_position_fraction,
@@ -32,7 +34,7 @@ impl KellySizer {
 
             let (side, raw_kelly) = if c.probability > c.market_price {
                 // Buy Yes
-                let k = (c.probability - c.market_price) / (1.0 - c.market_price);
+                let k = (c.probability - c.market_price) / (Decimal::ONE - c.market_price);
                 (TradeSide::BuyYes, k)
             } else {
                 // Buy No
@@ -41,7 +43,7 @@ impl KellySizer {
             };
 
             // If edge is negative or zero (shouldn't happen with above logic unless equal), fraction is 0
-            if raw_kelly <= 0.0 {
+            if raw_kelly <= Decimal::ZERO {
                 continue;
             }
 
@@ -73,10 +75,10 @@ mod tests {
 
         let candidates = vec![EdgedCandidate {
             candidate: RawCandidate::default(),
-            score: 0.0,
-            probability: 0.6,
-            market_price: 0.5,
-            edge: 0.1,
+            score: Decimal::ZERO,
+            probability: Decimal::new(6, 1),  // 0.6
+            market_price: Decimal::new(5, 1), // 0.5
+            edge: Decimal::new(1, 1),         // 0.1
         }];
 
         let decisions = sizer.size_positions(candidates);
@@ -84,9 +86,9 @@ mod tests {
         let d = &decisions[0];
         assert_eq!(d.side, TradeSide::BuyYes);
         // Kelly = (0.6 - 0.5) / 0.5 = 0.2
-        assert!((d.kelly_fraction - 0.2).abs() < 1e-6);
+        assert!((d.kelly_fraction - Decimal::new(2, 1)).abs() < Decimal::new(1, 6));
         // Half Kelly = 0.1, Cap = 0.05 -> 0.05
-        assert!((d.size_fraction - 0.05).abs() < 1e-6);
+        assert!((d.size_fraction - Decimal::new(5, 2)).abs() < Decimal::new(1, 6));
     }
 
     #[test]
@@ -95,10 +97,10 @@ mod tests {
 
         let candidates = vec![EdgedCandidate {
             candidate: RawCandidate::default(),
-            score: 0.0,
-            probability: 0.2,
-            market_price: 0.5,
-            edge: -0.3,
+            score: Decimal::ZERO,
+            probability: Decimal::new(2, 1),  // 0.2
+            market_price: Decimal::new(5, 1), // 0.5
+            edge: Decimal::new(-3, 1),        // -0.3
         }];
 
         let decisions = sizer.size_positions(candidates);
@@ -106,8 +108,8 @@ mod tests {
         let d = &decisions[0];
         assert_eq!(d.side, TradeSide::BuyNo);
         // Kelly = (0.5 - 0.2) / 0.5 = 0.6
-        assert!((d.kelly_fraction - 0.6).abs() < 1e-6);
+        assert!((d.kelly_fraction - Decimal::new(6, 1)).abs() < Decimal::new(1, 6));
         // Half Kelly = 0.3, Cap = 0.05 -> 0.05
-        assert!((d.size_fraction - 0.05).abs() < 1e-6);
+        assert!((d.size_fraction - Decimal::new(5, 2)).abs() < Decimal::new(1, 6));
     }
 }
