@@ -1,392 +1,77 @@
-# Polymind
-## System Overview
-The system transforms live news into automated trades using the following steps:
-
-- Ingest real-time news + market updates
-- Normalize + clean text
-- Extract entities & dates
-- Retrieve candidate markets using BM25
-- Filter + score markets with a transparent heuristic
-- Select Top-K markets with diversity constraints
-- Convert scores → probabilities
-- Generate trade decisions based on edge vs market price
-- Kelly-size positions with risk caps
-- Execute orders with microstructure-aware rules
-- Persist all data to PostgreSQL (relational) & QuestDB (time-series)
-
-The system is fully event-driven and optimized for real-time reaction to macroeconomic headlines.
-
-## Architecture
-The system uses an actor model: each actor has isolated state, async message loops, and communicates via a shared pub/sub Bus.
-Only one actor is allowed to mutate the databases: Monitoring/PersistenceActor
-
-All others are pure transformers.
-
-Actors:
- - RSSActor – RSS news ingestion 
- - FJActor – Fast macro alert ingestion 
- - PolymarketActor – Market metadata ingestion 
- - MarketDataActor – Provides real-time quotes and orderbook snapshots 
- - StrategyActor – Merged Matcher + Strategy (core logic)
- - ExecutionActor – Executes orders, returns fills 
- - RiskManagerActor – Exposure & risk limits
- - MonitoringPersistenceActor – Logging, metrics, and persistence (PostgreSQL + QuestDB)
-
-Key Properties
- - Real-time and Event-driven
- - No shared mutable state 
- - Storage writes isolated to a single actor
-
-## Actors
-### Ingest Layer (News + Markets)
-1- RSSActor
-  - Pulls general RSS feeds. 
-  - Normalizes articles into a unified RawNews format. 
-  - Publishes to raw-news.
-
-2- FJActor (FinancialJuice)
- - Fetches high-frequency macro-breaking alerts. 
- - Standardizes message format to RawNews. 
- - Publishes to raw-news.
-
-3- PolymarketActor 
- - Periodically fetches all Polymarket markets. 
- - Normalizes fields: market_id, title, description, tags, outcomes, category, resolve_date, liquidity. 
- - Publishes to indexed-markets (for StrategyActor)
-
-### market data actor
-- The StrategyActor requests real-time prices/quotes for markets in its Top-K list. 
-- MarketDataActor returns:
-  - bid/ask/mid prices 
-  - depth (bid/ask size)
-  - 24h volume & open interest 
-  - spreads, liquidity metrics
-
-- Sends market data to StrategyActor and RiskManagerActor.
-- Publishes:market-data
-
-### Strategy Layer
-StrategyActor
-
-This is the core brain of the system.
-It performs matching, ranking, scoring, probability estimation, edge analysis, risk-aware sizing, and trade decision generation.
-
-Consumes:
-  - raw-news 
-  - indexed-markets 
-  - market-data 
-  - fills/execution reports
-
-Communicates:
- - ⇆ MarketDataActor (quote requests/responses)
- - ⇆ ExecutionActor (orders/fills)
- - ⇆ RiskManagerActor (risk veto/limits)
-
-Produces:
- - trade-decisions (orders)
- - Internal logs/metrics → Monitoring/PersistenceActor
-
-### Execution layer
-
-Receives trade decisions from StrategyActor. 
-  - Performs real/mocked execution:
-  - limit orders 
-  - crossing when edge sufficient 
-  - slicing + re-quoting 
-  - TTL & cancellation rules
-
-Sends:
-  - fills/execution reports → StrategyActor + RiskManagerActor
-
-Publishes:
-  - orders 
-  - fills
-
-### Risk Layer
-
-RiskManagerActor
-
-Receives:
-  - Market data from MarketDataActor 
-  - Fills & order data from ExecutionActor
-
-Maintains risk caps:
-  - per-market exposure 
-  - per-event exposure 
-  - gross portfolio limits 
-  - liquidity consumption limits
-
-Can send risk veto / override signals to StrategyActor.
-
-
-### Monitoring & Persistence Layer (Only actor allowed to touch DB)
-
-MonitoringPersistenceActor
-
-- Subscribes to all major pipelines (sampled or full). 
-- Responsible for all mutations to storage.
-
-Writes:
-- PostgreSQL → relational/core data
-- QuestDB → time-series data (ticks, PnL, metrics)
-
-Produces:
-- metrics 
-- logs 
-- latency measurements 
-- PnL curves
-
-###  Storage Architecture
-
-PostgreSQL (relational layer)
-
-Stores:
-- markets 
-- news 
-- matches 
-- signals 
-- decisions 
-- orders 
-- fills 
-- positions 
-- risk limits 
-- configuration
-
-QuestDB (time-series layer)
-
-Stores:
-- ticks & quotes 
-- orderbook snapshots 
-- PnL timeseries 
-- latency metrics 
-- actor performance metrics
-
-Only MonitoringPersistenceActor writes to these databases.
-
-
-## Full Matching + Decision Pipeline (Deep Explanation)
-Goal: convert unpredictable news text into clean, comparable tokens.
-
-### 1 - Normalize + Tokenize
-Goal: convert unpredictable news text into clean, comparable tokens.
-
-Steps:
-
-1 - Lowercase everything : Avoid differences between “FED” and “Fed”.
-2 - Strip URLs & punctuation : Remove hyperlinks, emojis, special symbols.
-3 - Collapse whitespace: Multiple spaces → one.
-4 - Keep ALL-CAPS tokens: Important for economic entities: ECB, FOMC, GDP, CPI.
-5 - Keep numbers Critical: rates, percentages, dates, years.
-6 - Stopword removal: Minimal stopword list so meaning remains:“the”, “and”, “a”, “to”, etc.
-
-Why this matters -> Tokens define the quality of all downstream stages: entity extraction, BM25 search, overlap scoring, etc.
-
-
-### 2 - Entity & Date Extraction
-
-Goal: convert unpredictable news text into clean, comparable tokens.
-
-1 - Entities:
-
-Use curated lists + Aho-Corasick for:
-
-Central banks: FED, ECB, BOE, BOJ
-Countries: US, China, Japan, etc.
-Leaders: Biden, Putin, Lagarde
-Economic terms: inflation, unemployment
-Tickers/symbols: EURUSD, BTC, SPX
-
-2 - Numbers:
-integers (2024, 50)
-percent (3%, 12.5%)
-basis points (25bps, 50bp)
-large numbers ($5B, 1.2T)
-
-3 - Dates
-Use regex + chrono rules:
-
-Dec 15
-next week
-by year-end
-Q4
-
-
-Map natural language into ranges:
-“year-end” → Dec 31 current year
-“next week” → next Monday–Sunday window
-
-
-Why this matters
-
-Entities + dates allow:
-  - massively improved filtering
-  - relevance boosting
-  - category alignment with markets
-  - This is one of the strongest signals in the model.
-
-### Candidate Generation with BM25 (Lexical Retrieval)
-Goal: find 100 candidate markets quickly and cheaply.
-
-Polymarket market titles are: short, literal, highly keyword-dependent
-BM25 excels at ranking short, keyword-driven text.
-
-BM25 Inputs:
- - title
- - description
- - tags
- - (sometimes) outcomes
-
-BM25 Output: list of (market_id, score) sorted by lexical relevance
-
-Why top-100: cheap, covers all plausible matches and provides baseline for later ranking
-
-### Hard Filters (False Positive Reduction)
-Date compatibility: Headline mentions “Dec 15” → market must resolve near that date.
-
-Category alignment: If headline mentions “rates”, “Fed”, “inflation” → market must be in monetary/macro category.
-
-Entity overlap requirement: If headline mentions “Biden”, market must reference Biden or related entities.
-
-Liquidity guards -> Drop markets with:
- - insufficient open interest
- - low 24h volume
- - very wide spreads
-
-Why - > Hard filters massively boost precision even before scoring.
-
-### Heuristic Scoring (Simple & Transparent)
-
-score =
-0.50 * bm25_norm
-+0.25 * entity_overlap
-+0.10 * number_overlap
-+0.10 * time_compat
-+0.15 * liquidity_score
--0.05 * staleness_penalty
-
-Parameter Explanation
-
-- bm25_norm (50%) – lexical relevance
-- entity_overlap (25%) – match on people/orgs/countries
-- number_overlap (10%) – match on dates/numbers/rates
-- time_compat (10%) – alignment of date ranges
-- liquidity_score (15%) – spreads, OI, volume
-- staleness_penalty (-5%) – penalize old markets
-
-### Top-K with Diversity
-After scoring:
-1 -Filter:
-- bm25_norm ≥ 0.3
-- entity_overlap ≥ 0.2
-
-2 -Apply MMR:
-mmr = λ*score - (1-λ)*max_similarity
-λ ≈ 0.7
-
-3 - Select K = 5.
-
-Why => Ensures coverage of different but relevant markets, avoiding duplicates.
-
-### Dedup Headlines
-To avoid reprocessing spam/duplicates:
-- Normalize → AHash/xxHash 
-- LRU TTL cache (24–72 hours)
-- Optional SimHash for paraphrases
-
-Why => Avoids redundant trades and reduces pipeline load.
-
-### Score → Probability
-Convert final score s into a belief p:
-- Start with a monotonic mapping from your final score s∈[0,1] to probability
-- use logistic
-- apply conservatism shrink toward 0.5
-
-p_raw = sigmoid(a + b*s)
-p = 0.5 + λ*(p_raw - 0.5)
-clip p ∈ [0,1]
-
-a, b tuned later
-λ ∈ [0.2, 0.6] to shrink toward 0.5
-
-Why => Models tend to be overconfident; shrinkage prevents extreme beliefs.
-
-### Compare Belief vs Market Price
-let:
-
-y = YES midprice
-p = belief
-
-1 - Compute edge: edge = p - y
-
-2 - Trading rule:
-if edge > τ → Buy YES
-else if edge < -τ → Buy NO
-else → no trade
-
-τ = 0.01–0.02 for fee/slippage buffer.
-
-### Kelly-Style Sizing (with Risk Caps)
-yes price is y no price is n = 1-y
-
-YES trade (buy YES at price y):
-f* = (p - y) / (1 - y) 
-
-NO trade:
-f* = (y - p) / y
-
-Apply:
-- fractional Kelly (κ = 0.1–0.33)
-- per-market caps 
-- per-event caps 
-- portfolio gross caps 
-- liquidity clipping (≤X% of book depth)
-
-Contracts: number of contracts = floor( bankroll * f / price )
-
-### Execution Rules (Practical Microstructure)
-ExecutionActor enforces:
-
-Limit-first
-- Quote inside spread 
-- Cross only if edge > threshold
-
-Slicing
-- Break large orders 
-- Reprice on quote change
-
-TTL / Cancellation 
-- Order expires if not filled in N seconds and re-queue if not filled
-
-Slippage-aware: Incorporate spread + fee into edge check
-
-Cooldown: Avoid flip-flopping on small price moves
-
-### Exit/management
-- Target exit: as price approaches your belief (or outcome time nears).
-- Stop-loss: optional soft stop on edge reversal p−y flips sign beyond −τ).
-- Time decay: reduce position as resolution nears if liquidity vanishes.
-- Rebalance: if your belief updates (new headlines), recompute and resize.
-
-## Storage
-
-PostgreSQL (Relational)
-
-Stores:
-- markets
-- news
-- matches
-- decisions
-- orders
-- fills
-- signals
-- positions
-- config & risk limits
-
-QuestDB (Time-series)
-
-Stores:
-- market ticks
-- orderbook snapshots
-- PnL curves
-- latency metrics
-- actor metrics
+# Ingestor: Autonomous News Trading Bot
+
+Ingestor is a high-performance, event-driven trading bot written in Rust. It is designed to autonomously ingest real-time news, analyze sentiment and relevance using NLP and LLMs, and execute trades on prediction markets (specifically Polymarket) based on probabilistic signals.
+
+## 🚀 Key Features
+
+### 1. **Event-Driven Architecture**
+Built on a modular **Actor System** using `tokio` channels, ensuring low latency and clean separation of concerns:
+- **Discovery**: Fetches news from RSS feeds and other sources.
+- **Strategy**: Core logic engine (Filtering, Deduplication, Scoring, Sizing).
+- **Market Data**: Retrieves live prices and order books from Gamma/Polymarket APIs.
+- **Execution**: Management of orders via EIP-712 signing and PolyMarket CTF Exchange interaction.
+
+### 2. **Advanced NLP Pipeline**
+- **Tokenization**: Custom pipeline with stemming, stopword removal, and n-gram generation (bigrams/trigrams).
+- **SimHash**: Fast locality-sensitive hashing for detecting near-duplicate news events.
+- **BM25 Retrieval**: `tantivy`-based indexing to instantly find relevant prediction markets for breaking news.
+- **LLM Integration**: Interfaces with LLMs for high-level semantic analysis and probability estimation.
+
+### 3. **Quantitative Strategy**
+- **Financial Precision**: Uses `rust_decimal` for all financial calculations (prices, sizes, bankroll) to avoid floating-point errors.
+- **Kelly Criterion**: Dynamic position sizing based on estimated edge and probability.
+- **Risk Management**: Configurable limitations on position sizes and bankroll exposure.
+
+## 🛠️ Setup & Configuration
+
+### Prerequisites
+- Rust (latest stable)
+- Node.js (for some auxiliary scripts if needed)
+
+### Environment Variables
+Create a `.env` file in the root directory:
+
+```bash
+# Polymarket / Gamma API
+POLY_API_KEY="your_api_key"
+POLY_API_SECRET="your_api_secret"
+POLY_PASSPHRASE="your_passphrase"
+POLY_GAMMA_MARKETS_URL="https://gamma-api.polymarket.com/markets"
+
+# Strategy Config
+STRATEGY_BANKROLL=1000.0
+
+# LLM Config
+LLM_PROVIDER="openai" # or "anthropic"
+LLM_API_KEY="sk-..."
+```
+
+### Running
+```bash
+# Run the ingestor
+cargo run --bin ingestor
+
+# Run tests
+cargo test
+```
+
+## 📂 Project Structure
+
+- `src/core`: Shared types and domain definitions (`RawNews`, `Order`, `Signal`).
+- `src/discovery`: Feed fetchers and pollers.
+- `src/strategy`:
+    - `actor.rs`: Main strategy coordination.
+    - `tokenization.rs`: NLP processing.
+    - `sim_hash_cache.rs`: Deduplication logic.
+    - `kelly.rs`: Position sizing math.
+    - `market_index.rs`: BM25 search index.
+- `src/marketdata`: Market price fetching actors.
+- `src/execution`: Order signing and submission actors.
+
+## 🔮 Next Steps
+
+1.  **Persistence Layer**: Implement a database (Postgres/SQLite) to store trade history, signals, and news events for backtesting.
+2.  **Backtesting Engine**: Create a simulation mode to replay historical news and validate strategy performance.
+3.  **Live Monitoring Dashboard**: A TUI or Web UI to monitor active positions, PnL, and system health in real-time.
+4.  **Enhanced Risk Management**: specific limits per market category or correlated assets.
+5.  **Multi-LLM Consensus**: Query multiple models and aggregate scores for higher confidence signals.
