@@ -781,7 +781,7 @@ mod tests {
             },
             kelly_fraction: Decimal::new(1, 1), // 0.1
             size_fraction: Decimal::new(1, 1),  // 0.1
-            side: TradeSide::BuyYes,
+            side: TradeSide::Buy("Yes".to_string()),
         };
 
         let orders_yes = actor
