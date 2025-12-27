@@ -22,7 +22,7 @@ pub struct LlmCfg {
     pub api_key: String,
     #[serde(default = "default_llm_model")]
     pub model: String,
-    #[serde(default = "default_llm_base_url")]
+    #[serde(default = "default_llm_base_url", rename = "baseUrl")]
     pub base_url: String,
 }
 
@@ -96,12 +96,6 @@ pub struct PolyCfg {
     #[serde(rename = "pageLimit", default = "default_page_limit")]
     pub page_limit: u32,
     #[serde(default)]
-    #[allow(dead_code)]
-    pub ascending: bool,
-    #[serde(rename = "includeClosed", default)]
-    #[allow(dead_code)]
-    pub include_closed: bool,
-    #[serde(default)]
     pub api_key: String,
     #[serde(default)]
     pub api_secret: String,
@@ -123,8 +117,6 @@ impl Default for PolyCfg {
             gamma_markets_url: "https://gamma-api.polymarket.com/markets".to_string(),
             market_list_refresh: Duration::from_secs(300),
             page_limit: default_page_limit(),
-            ascending: false,
-            include_closed: false,
             api_key: "".to_string(),
             api_secret: "".to_string(),
             passphrase: "".to_string(),
@@ -145,9 +137,6 @@ fn default_token_decimals() -> u32 {
 pub struct RssFeedCfg {
     pub id: String,
     pub url: String,
-    #[serde(default)]
-    #[allow(dead_code)]
-    pub lang: String,
 }
 
 impl Default for RssFeedCfg {
@@ -155,7 +144,6 @@ impl Default for RssFeedCfg {
         Self {
             id: "default".to_string(),
             url: "http://localhost".to_string(),
-            lang: "en".to_string(),
         }
     }
 }
@@ -187,8 +175,6 @@ pub struct FinJuiceCfg {
     #[serde(rename = "altUrl")]
     pub alt_url: String,
     pub info: String,
-    #[allow(dead_code)]
-    pub cookie: String,
 }
 
 impl Default for FinJuiceCfg {
@@ -198,7 +184,6 @@ impl Default for FinJuiceCfg {
             refresh: Duration::from_secs(60),
             alt_url: "http://localhost".to_string(),
             info: "".to_string(),
-            cookie: "".to_string(),
         }
     }
 }
@@ -211,6 +196,12 @@ pub struct StrategyCfg {
     pub sim_execution: bool,
     #[serde(default, rename = "simMarketData")]
     pub sim_market_data: bool,
+    #[serde(default = "default_top_candidates", rename = "topCandidates")]
+    pub top_candidates: usize,
+}
+
+fn default_top_candidates() -> usize {
+    5
 }
 
 fn default_bankroll() -> f64 {

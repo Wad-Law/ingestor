@@ -10,10 +10,9 @@ polymarket:
   gammaEventsUrl: "https://gamma-api.polymarket.com/events"
   gammaMarketsUrl: "https://gamma-api.polymarket.com/markets"
   rpcUrl: "https://polygon-rpc.com"
+  dataApiUrl: "https://data-api.polymarket.com"
   marketListRefresh: "30s"
   pageLimit: 100
-  ascending: false
-  includeClosed: false
 
 rss:
   refresh: "5s"
@@ -21,19 +20,21 @@ rss:
   feeds:
     - id: "cnn"
       url: "http://rss.cnn.com/rss/edition.rss"
-      lang: "en"
     - id: "wsj"
       url: "https://feeds.a.dj.com/rss/RSSWorldNews.xml"
-      lang: "en"
 
 financialJuice:
   baseUrl: "https://www.financialjuice.com/"
   altUrl: "https://live.financialjuice.com/FJService.asmx/Startup"
-  cookie: ""
   info: "%22EAAAADyxhXfpGMQesDtGBUqmT8eYX0feSuQ3O7zMSuHnGXYhgVERjD1oCDt1gCc7VA%2B2A3rh2MNmMLOm3H9erZ%2Fncqf1JKZe6J%2BgB9CACwSLODRlnVZjKuBJB%2FHfF7%2BpXRPGjZcwgloeGsLbUb%2BA6tnMd7gYKDoXbUY7YcF9GJUrpzJHpSbXgxA90MVcitNMEjXjALB6tasgaT53eSIYy%2FC%2FJAtadH1Fk7fneZCwfcz6mSMGfEzWlAIPlJANxkfKayBJ6SMH%2BHFh5HflgrpWgQvQGb2mwPgaCiaXwTJ%2Ba5SBv0HnfhEJixMY9GD9%2BlYX9FUodIiaVmrSZzKKdL%2BDhjpCOc0%3D%22"
   refresh: "5s"
 
 strategy:
-  simExecution: false
-  simMarketData: false
+  simExecution: true
+  simMarketData: true
   simBankroll: 1000.0
+  topCandidates: 5
+
+llm:
+  model: "gpt-4o-mini"
+  baseUrl: "https://api.openai.com/v1"

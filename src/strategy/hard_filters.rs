@@ -70,7 +70,7 @@ impl HardFilterer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::strategy::event_features::{Entity, EntityKind, TimeWindow};
+    use crate::strategy::event_features::{Entity, TimeWindow};
     use crate::strategy::types::RawCandidate;
     use chrono::{Duration, Utc};
 
@@ -117,7 +117,6 @@ mod tests {
         let filterer = HardFilterer::new();
 
         let entity_apple = Entity {
-            kind: EntityKind::Company,
             value: "Apple".to_string(),
         };
         let entities = vec![entity_apple];

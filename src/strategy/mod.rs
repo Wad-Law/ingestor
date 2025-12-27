@@ -1,5 +1,5 @@
 pub mod actor;
-mod canonical_event;
+pub mod analyst;
 mod event_features;
 pub mod exact_duplicate_detector;
 pub mod hard_filters;

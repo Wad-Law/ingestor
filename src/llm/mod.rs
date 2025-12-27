@@ -28,12 +28,26 @@ impl LlmClient {
 
     pub async fn analyze(&self, news_title: &str, market_question: &str) -> Result<SignalResponse> {
         let prompt = format!(
-            "You are a financial analyst. Analyze the following news title in the context of the prediction market question.\n\
-            News: \"{}\"\n\
-            Market Question: \"{}\"\n\
-            \n\
-            Determine if the news increases the probability of the outcome 'Yes', decreases it, or is neutral.\n\
-            Output JSON with fields: 'sentiment' (Positive/Negative/Neutral), 'confidence' (0.0-1.0), and 'reasoning'.\n\
+            "You are a financial analyst specializing in event-driven market prediction. Analyze the following news in the context of the prediction market question.
+
+            News: \"{}\"
+            Market Question: \"{}\"
+
+            Perform the following analysis step-by-step:
+            1. Identify the key entities and events in the news.
+            2. Compare this against historical precedents or market expectations.
+            3. List 3 reasons why this news might imply 'Yes' (increases probability).
+            4. List 3 reasons why this news might imply 'No' (decreases probability).
+            5. Assign a weight (1-10) to each reason based on its impact.
+            6. Synthesize these reasons into a final probability adjustment.
+
+            Based on this analysis, determine the sentiment and new confidence level.
+            
+            Output strictly valid JSON with fields: 
+            - 'sentiment' (Positive/Negative/Neutral), 
+            - 'confidence' (0.0 to 1.0, representing the strength of the move), 
+            - 'reasoning' (A concise summary of your step-by-step analysis).
+
             'Positive' means 'Yes' is more likely. 'Negative' means 'No' is more likely (or 'Yes' is less likely).",
             news_title, market_question
         );

@@ -3,8 +3,7 @@ use crate::config::config::AppCfg;
 use crate::core::types::{
     Actor, Execution, MarketDataRequest, MarketDataSnap, Order, PolyMarketEvent, Portfolio, RawNews,
 };
-use crate::llm::LlmClient;
-use crate::strategy::canonical_event::CanonicalEventBuilder;
+use crate::strategy::analyst::MarketAnalyst;
 use crate::strategy::event_features::{EventFeatureExtractor, FeatureDictionaries};
 use crate::strategy::exact_duplicate_detector::{
     ExactDuplicateDetector, ExactDuplicateDetectorConfig,
@@ -22,7 +21,7 @@ use rust_decimal::prelude::*;
 use std::collections::HashMap;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
-
+use crate::llm::LlmClient;
 use crate::persistence::database::Database;
 
 pub struct StrategyActor {
@@ -31,16 +30,16 @@ pub struct StrategyActor {
     pub detector: ExactDuplicateDetector,
     pub sim_hash_cache: SimHashCache,
     pub event_feature_extractor: EventFeatureExtractor,
-    pub canonical_builder: CanonicalEventBuilder,
     pub market_index: MarketIndex,
     pub hard_filterer: HardFilterer,
     pub kelly_sizer: KellySizer,
     pub market_data_cache: HashMap<String, MarketDataSnap>,
     pub bankroll: Decimal,
-    pub llm_client: LlmClient,
+    pub analyst: MarketAnalyst,
     pub db: Database,
     pub portfolio: Portfolio,
     pub status: crate::core::types::SystemStatus,
+    pub top_candidates: usize,
 }
 
 impl StrategyActor {
@@ -53,13 +52,16 @@ impl StrategyActor {
             event_feature_extractor: EventFeatureExtractor::new(
                 FeatureDictionaries::default_minimal(),
             ),
-            canonical_builder: CanonicalEventBuilder::new(),
             market_index: MarketIndex::new().expect("Failed to initialize MarketIndex"),
             hard_filterer: HardFilterer::new(),
             kelly_sizer: KellySizer::default(),
             market_data_cache: HashMap::new(),
             bankroll: Decimal::from_f64(cfg.strategy.sim_bankroll).unwrap_or(Decimal::ZERO),
-            llm_client: LlmClient::new(cfg.llm.clone()),
+            analyst: MarketAnalyst::new(
+                LlmClient::new(cfg.llm.clone()),
+                db.clone(),
+                cfg.strategy.top_candidates,
+            ),
             db,
             portfolio: Portfolio {
                 positions: HashMap::new(),
@@ -67,6 +69,7 @@ impl StrategyActor {
                 total_equity: Decimal::ZERO,
             },
             status: crate::core::types::SystemStatus::Active,
+            top_candidates: cfg.strategy.top_candidates,
         }
     }
 
@@ -89,26 +92,18 @@ impl StrategyActor {
     // ============================
 
     /// Core pipeline for a fresh news item:
-    /// 1) Dedup
+    /// 1) Check for halt
+    /// 2) Exact Dedup based on raw news event
     /// 2) Normalize + tokenize
-    /// 3) Entity & date extraction
-    /// 4) Candidate generation (BM25)
-    /// 5) Hard filters
-    /// 6) Heuristic scoring
-    /// 7) Top-K selection with diversity
-    /// 8) Score -> probability (logistic)
-    /// 9) Compare belief vs market price
-    /// 10) Kelly sizing + risk caps
-    /// 11) Build orders
+    /// 3) Semantic dedup
+    /// 4) Entity & date extraction
+    /// 5) Candidate generation using lexical and semantic lookup
+    /// 6) Hard filters
+    /// 7) llm scoring
+    /// 8) Kelly sizing + risk caps
+    /// 9) Build orders
     async fn handle_news_event(&mut self, raw_news: &RawNews) -> Vec<Order> {
         let order = Vec::new();
-        // RawNews → normalized string → exact dedup
-        //                ↓
-        //            tokenize
-        //                ↓
-        //            SimHash → near-duplicate dedup
-        //                ↓
-        //      entity/date extraction → BM25 → scoring → decision
 
         // 1. Check for Halt
         if let crate::core::types::SystemStatus::Halted(reason) = &self.status {
@@ -118,10 +113,10 @@ impl StrategyActor {
 
         // 2. Cheap exact dedup to eliminate trivial duplicates
         if self.detector.is_duplicate(raw_news) {
-            println!("Skipping duplicate news.");
+            warn!("Skipping duplicate news.");
             return order; // Return empty if dup
         } else {
-            println!("New event — continue pipeline.");
+            info!("New event — continue pipeline.");
         }
 
         // Persist Event (fire and forget / log error)
@@ -145,103 +140,47 @@ impl StrategyActor {
         }
         self.sim_hash_cache.insert(h);
 
-        // 3. lexical and semantic using hard coded rules => semantic is generated from lexical
+        // 4. lexical and semantic using hard coded rules => semantic is generated from lexical
         let now = Utc::now();
         let feat = self.event_feature_extractor.extract(&tokenized_news, now); // Lexical layer (layers, numbers, time window)
-        let _canonical = self.canonical_builder.build(&tokenized_news, &feat); // semantic layer (domain, event kind, primary/secondary entities, number interpretation, location, semantic time window)
 
-        // 4. Candidate generation with Hybrid Search (BM25 + Semantic)
+        // 5. Candidate generation with Hybrid Search (BM25 + Semantic)
         let raw_candidates =
             self.retrieve_candidates(tokenized_news.tokens.as_slice(), &raw_news.title);
 
-        // 5. Hard filters to kill false positives
+        // 6. Hard filters
         let entities = &feat.entities;
         let time_window = &feat.time_window;
         let filtered_candidates = self
             .hard_filterer
             .apply(raw_candidates, entities, time_window);
 
-        // 6. LLM Scoring
-        let mut edged_candidates = Vec::new();
-
-        // Take top N candidates for LLM analysis to save costs
-        let top_candidates = filtered_candidates.into_iter().take(5).collect::<Vec<_>>();
+        // Take top N candidates for ensure_market_data optimization
+        let top_candidates_for_data = filtered_candidates
+            .iter()
+            .take(self.top_candidates)
+            .map(|c| c.clone())
+            .collect::<Vec<_>>();
 
         // Ensure we have market data (Price + Question) for these candidates
-        self.ensure_market_data(&top_candidates).await;
+        // Note: We need to convert back to RawCandidate for ensure_market_data or just pass cloned vec
+        self.ensure_market_data(&top_candidates_for_data).await;
 
-        for candidate in top_candidates {
-            // ... (market question retrieval)
-            let market_question =
-                if let Some(snap) = self.market_data_cache.get(&candidate.market_id) {
-                    snap.question.clone()
-                } else {
-                    "Unknown Market Question".to_string()
-                };
+        // 7. Analyst (LLM Scoring)
+        // Pass the candidates to analyst. Analyst will also limit to top_candidates internally,
+        // but since we already filtered for data fetching efficiency, we pass what we have.
+        // Analyst expects Vec<RawCandidate>.
+        let edged_candidates = self
+            .analyst
+            .analyze_candidates(
+                raw_news,
+                filtered_candidates, // Pass all filtered, Analyst handles top_N logic
+                &self.market_data_cache,
+                event_db_id,
+            )
+            .await;
 
-            // Call LLM
-            match self
-                .llm_client
-                .analyze(&raw_news.title, &market_question)
-                .await
-            {
-                Ok(signal) => {
-                    info!("LLM Signal for {}: {:?}", candidate.market_id, signal);
-
-                    // Persist Signal
-                    if let Some(eid) = event_db_id {
-                        if let Err(e) = self
-                            .db
-                            .save_signal(eid, &candidate.market_id, &signal)
-                            .await
-                        {
-                            error!("Failed to save signal: {}", e);
-                        }
-                    }
-
-                    // Convert signal to TradeSide and Probability
-                    let (_side, prob) = match signal.sentiment.as_str() {
-                        "Positive" => (
-                            TradeSide::BuyYes,
-                            Decimal::from_f64(0.5 + (signal.confidence * 0.5))
-                                .unwrap_or(Decimal::new(5, 1)),
-                        ),
-                        "Negative" => (
-                            TradeSide::BuyNo,
-                            Decimal::from_f64(0.5 + (signal.confidence * 0.5))
-                                .unwrap_or(Decimal::new(5, 1)),
-                        ),
-                        _ => (TradeSide::BuyYes, Decimal::new(5, 1)), // Neutral 0.5
-                    };
-
-                    // Get market price
-                    let market_price =
-                        if let Some(snap) = self.market_data_cache.get(&candidate.market_id) {
-                            (snap.best_bid + snap.best_ask) / Decimal::new(2, 0)
-                        } else {
-                            Decimal::new(5, 1) // 0.5
-                        };
-
-                    if prob > Decimal::new(6, 1) {
-                        // Threshold 0.6
-                        let edged = EdgedCandidate {
-                            candidate: candidate.clone(), // Clone candidate? It was moved? No, loop is for candidate in top_candidates.
-                            // Need to make sure types match. candidate is RawCandidate.
-                            score: prob,
-                            probability: prob,
-                            market_price,
-                            edge: prob - market_price,
-                        };
-                        edged_candidates.push(edged);
-                    }
-                }
-                Err(e) => {
-                    error!("LLM analysis failed for {}: {:?}", candidate.market_id, e);
-                }
-            }
-        }
-
-        // 7. Kelly Sizing
+        // 8. Kelly Sizing
         let sized_decisions = self.kelly_sizer.size_positions(edged_candidates);
 
         // Persist Decisions
@@ -251,7 +190,7 @@ impl StrategyActor {
             }
         }
 
-        // 8. Build Orders
+        // 9. Build Orders
         self.build_orders_from_sized_decisions(&sized_decisions)
             .await
     }
@@ -581,10 +520,10 @@ impl Actor for StrategyActor {
         }
 
         // Subscribe to both broadcast streams
-        let mut md_rx = self.bus.market_data.subscribe(); // broadcast::Receiver<Arc<MarketDataSnap>>
-        let mut poly_rx = self.bus.polymarket_events.subscribe(); // broadcast::Receiver<Arc<RawNews>>
-        let mut news_rx = self.bus.raw_news.subscribe(); // broadcast::Receiver<Arc<RawNews>>
-        let mut executions_rx = self.bus.executions.subscribe(); // broadcast::Receiver<Arc<Executions>>
+        let mut md_rx = self.bus.market_data.subscribe();
+        let mut poly_rx = self.bus.polymarket_events.subscribe();
+        let mut news_rx = self.bus.raw_news.subscribe();
+        let mut executions_rx = self.bus.executions.subscribe();
         let mut balance_rx = self.bus.balance.subscribe();
         let mut status_rx = self.bus.system_status.subscribe();
         let mut snapshot_rx = self.bus.positions_snapshot.subscribe();
@@ -750,7 +689,6 @@ mod tests {
             event_feature_extractor: EventFeatureExtractor::new(
                 FeatureDictionaries::default_minimal(),
             ),
-            canonical_builder: CanonicalEventBuilder::new(),
             market_index: MarketIndex::new().unwrap(),
             hard_filterer: HardFilterer::new(),
             // scorer: Scorer::new(),
@@ -758,8 +696,13 @@ mod tests {
             kelly_sizer: KellySizer::default(),
             market_data_cache: HashMap::new(),
             bankroll: Decimal::from_f64(1000.0).unwrap(),
-            llm_client: LlmClient::new(crate::config::config::LlmCfg::default()),
+            analyst: MarketAnalyst::new(
+                LlmClient::new(crate::config::config::LlmCfg::default()),
+                db.clone(),
+                5,
+            ),
             db,
+            top_candidates: 5,
             portfolio: Portfolio::default(),
             status: crate::core::types::SystemStatus::Active,
         };

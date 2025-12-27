@@ -1,7 +1,6 @@
 use crate::bus::types::Bus;
 use crate::core::types::Actor;
-use crate::core::types::MarketDataSnap; // Used in Result<MarketDataSnap> if I kept the signature? No, trait uses it.
-use anyhow::{Context, Result};
+use anyhow::Result;
 use async_trait::async_trait;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
@@ -95,8 +94,6 @@ mod tests {
             gamma_markets_url: "http://localhost/markets".to_string(),
             market_list_refresh: Duration::from_secs(1),
             page_limit: 10,
-            ascending: false,
-            include_closed: false,
             api_key: "".to_string(),
             api_secret: "".to_string(),
             passphrase: "".to_string(),

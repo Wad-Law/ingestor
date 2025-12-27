@@ -143,7 +143,12 @@ impl Database {
         .execute(&self.pool)
         .await?;
 
-        info!("Database tables initialized (Postgres).");
+        // Verify tables exist
+        let tables: Vec<(String,)> = sqlx::query_as("SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'")
+            .fetch_all(&self.pool)
+            .await?;
+        
+        info!("Database tables initialized (Postgres). Found tables: {:?}", tables.iter().map(|t| &t.0).collect::<Vec<_>>());
         Ok(())
     }
 
