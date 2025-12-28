@@ -148,6 +148,15 @@ impl StrategyActor {
         let raw_candidates =
             self.retrieve_candidates(tokenized_news.tokens.as_slice(), &raw_news.title);
 
+        // Log retrievals for debugging
+        if let Some(eid) = event_db_id {
+            for cand in &raw_candidates {
+                if let Err(e) = self.db.save_retrieval_log(eid, &cand.market_id).await {
+                    error!("Failed to save retrieval log: {}", e);
+                }
+            }
+        }
+
         if raw_candidates.is_empty() {
             warn!(
                 "No candidates found for news: ({}). Skipping.",

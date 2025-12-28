@@ -164,6 +164,20 @@ impl Database {
         .execute(&self.pool)
         .await?;
 
+        // Retrieval Logs
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS retrieval_logs (
+                id BIGSERIAL PRIMARY KEY,
+                event_id BIGINT NOT NULL,
+                market_id TEXT NOT NULL,
+                created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+            )
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
         // Verify tables exist
         let tables: Vec<(String,)> = sqlx::query_as(
             "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'",
@@ -212,6 +226,20 @@ impl Database {
         .bind(edge)
         .bind(kelly)
         .bind(size_frac)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn save_retrieval_log(&self, event_id: i64, market_id: &str) -> Result<()> {
+        sqlx::query(
+            r#"
+            INSERT INTO retrieval_logs (event_id, market_id)
+            VALUES ($1, $2)
+            "#,
+        )
+        .bind(event_id)
+        .bind(market_id)
         .execute(&self.pool)
         .await?;
         Ok(())

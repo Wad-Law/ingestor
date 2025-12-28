@@ -11,7 +11,7 @@ polymarket:
   gammaMarketsUrl: "https://gamma-api.polymarket.com/markets"
   rpcUrl: "https://polygon-rpc.com"
   dataApiUrl: "https://data-api.polymarket.com"
-  marketListRefresh: "30s"
+  marketListRefresh: "300s"
   pageLimit: 100
 
 rss:
