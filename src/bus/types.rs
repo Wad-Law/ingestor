@@ -35,7 +35,6 @@ impl<T: Clone + Send + Sync + 'static> BroadcastTopic<T> {
 #[async_trait]
 impl<T: Debug + Clone + Send + Sync + 'static> Topic<T> for BroadcastTopic<T> {
     async fn publish(&self, msg: T) -> Result<()> {
-        info!("Publishing message: {:?}", msg);
         // Non-blocking; errors only when no receivers (we can ignore or log)
         let _ = self.tx.send(Arc::new(msg));
         Ok(())

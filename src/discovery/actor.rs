@@ -90,7 +90,7 @@ impl MarketDiscoveryActor {
                 }
                 Err(e) => {
                     error!(
-                        "MarketDiscoveryActor: Failed to fetch events page at offset {}: {}. Retrying...",
+                        "MarketDiscoveryActor: Failed to fetch events page at offset {}: {:#}. Retrying...",
                         offset, e
                     );
                     consecutive_errors += 1;
@@ -154,7 +154,7 @@ impl Actor for MarketDiscoveryActor {
                             }
                         }
                         Err(e) => {
-                            error!("MarketDiscoveryActor: failed to fetch active poly market event: {}", e);
+                            error!("MarketDiscoveryActor: failed to fetch active poly market event: {:#}", e);
                             // backoff to avoid hot loop on repeated failures
                             tokio::time::sleep(Duration::from_secs(5)).await;
                         }

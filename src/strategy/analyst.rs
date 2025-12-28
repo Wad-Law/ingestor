@@ -75,7 +75,7 @@ impl MarketAnalyst {
                             .save_signal(eid, &candidate.market_id, &signal, &prompt, self.llm_client.model())
                             .await
                         {
-                            error!("Failed to save signal: {}", e);
+                            error!("Failed to save signal: {:#}", e);
                         }
                     }
 

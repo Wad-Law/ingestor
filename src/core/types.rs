@@ -134,21 +134,47 @@ impl PolyMarketMarket {
     pub fn get_tokens(&self) -> Vec<MarketToken> {
         let mut tokens_vec = Vec::new();
 
-        if let (Some(ids_str), Some(outcomes_str), Some(prices_str)) = (
-            &self.clobTokenIds,
-            &self.outcomes,
-            &self.outcomePrices,
-        ) {
-            // Parse JSON strings
-            let ids: Vec<String> = serde_json::from_str(ids_str).unwrap_or_default();
-            let outcomes: Vec<String> = serde_json::from_str(outcomes_str).unwrap_or_default();
-            let prices: Vec<String> = serde_json::from_str(prices_str).unwrap_or_default();
+        if let (Some(ids_str), Some(outcomes_str), Some(prices_str)) =
+            (&self.clobTokenIds, &self.outcomes, &self.outcomePrices)
+        {
+            // Try parsing and log errors if any
+            let ids: Vec<String> = match serde_json::from_str(ids_str) {
+                Ok(v) => v,
+                Err(e) => {
+                    tracing::warn!("Failed to parse clobTokenIds: '{}' - Error: {}", ids_str, e);
+                    return Vec::new(); // Return empty if critical ID parsing fails
+                }
+            };
+
+            let outcomes: Vec<String> = match serde_json::from_str(outcomes_str) {
+                Ok(v) => v,
+                Err(e) => {
+                    tracing::warn!(
+                        "Failed to parse outcomes: '{}' - Error: {}",
+                        outcomes_str,
+                        e
+                    );
+                    Vec::new()
+                }
+            };
+
+            let prices: Vec<String> = match serde_json::from_str(prices_str) {
+                Ok(v) => v,
+                Err(e) => {
+                    tracing::warn!(
+                        "Failed to parse outcomePrices: '{}' - Error: {}",
+                        prices_str,
+                        e
+                    );
+                    Vec::new()
+                }
+            };
 
             for i in 0..ids.len() {
                 if i < outcomes.len() && i < prices.len() {
                     let price = rust_decimal::Decimal::from_str_exact(&prices[i])
                         .unwrap_or(rust_decimal::Decimal::ZERO);
-                    
+
                     tokens_vec.push(MarketToken {
                         token_id: ids[i].clone(),
                         outcome: outcomes[i].clone(),

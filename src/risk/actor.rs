@@ -122,7 +122,7 @@ impl Actor for RiskActor {
                                 error!("RiskActor: Risk check failed: {}", e);
                             }
                         }
-                        Err(e) => error!("RiskActor: Balance stream error: {}", e),
+                        Err(e) => error!("RiskActor: Balance stream error: {:#}", e),
                     }
                 }
 

@@ -3,6 +3,8 @@ use crate::config::config::AppCfg;
 use crate::core::types::{
     Actor, Execution, MarketDataRequest, MarketDataSnap, Order, PolyMarketEvent, Portfolio, RawNews,
 };
+use crate::llm::LlmClient;
+use crate::persistence::database::Database;
 use crate::strategy::analyst::MarketAnalyst;
 use crate::strategy::event_features::{EventFeatureExtractor, FeatureDictionaries};
 use crate::strategy::exact_duplicate_detector::{
@@ -21,8 +23,6 @@ use rust_decimal::prelude::*;
 use std::collections::HashMap;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
-use crate::llm::LlmClient;
-use crate::persistence::database::Database;
 
 pub struct StrategyActor {
     pub bus: Bus,
@@ -124,7 +124,7 @@ impl StrategyActor {
         let event_db_id = match self.db.save_event(raw_news).await {
             Ok(id) => Some(id),
             Err(e) => {
-                error!("Failed to save event to DB: {}", e);
+                error!("Failed to save event to DB: {:#}", e);
                 None
             }
         };
@@ -149,7 +149,10 @@ impl StrategyActor {
             self.retrieve_candidates(tokenized_news.tokens.as_slice(), &raw_news.title);
 
         if raw_candidates.is_empty() {
-            warn!("No candidates found for news: ({}). Skipping.", raw_news.title);
+            warn!(
+                "No candidates found for news: ({}). Skipping.",
+                raw_news.title
+            );
             return order;
         }
 
@@ -207,7 +210,7 @@ impl StrategyActor {
         // Persist Decisions
         for decision in &sized_decisions {
             if let Err(e) = self.db.save_decision(event_db_id, decision).await {
-                error!("Failed to save decision: {}", e);
+                error!("Failed to save decision: {:#}", e);
             }
         }
 
@@ -263,7 +266,7 @@ impl StrategyActor {
                 market_id: id.clone(),
             };
             if let Err(e) = self.bus.market_data_request.publish(req).await {
-                error!("Failed to publish market data request: {}", e);
+                error!("Failed to publish market data request: {:#}", e);
             }
         }
 
@@ -339,7 +342,8 @@ impl StrategyActor {
                         token_id = Some(t.token_id.clone());
                     } else {
                         // Fallback: Log available outcomes to help debug multi-choice issues
-                        let available: Vec<String> = tokens.iter().map(|t| t.outcome.clone()).collect();
+                        let available: Vec<String> =
+                            tokens.iter().map(|t| t.outcome.clone()).collect();
                         warn!(
                             "Token ID not found for outcome '{}' in market {}. Available: {:?}",
                             target_outcome, decision.candidate.candidate.market_id, available
@@ -359,26 +363,12 @@ impl StrategyActor {
 
             // Persist Order
             if let Err(e) = self.db.save_order(&order).await {
-                error!("Failed to save order: {}", e);
+                error!("Failed to save order: {:#}", e);
             }
 
             orders.push(order);
         }
         orders
-    }
-
-    #[allow(dead_code)]
-    fn map_poly_event_to_news(&self, _evt: &PolyMarketEvent) -> RawNews {
-        // TODO: convert PolyMarketEvent into a RawNews-like structure
-        // Manually constructing RawNews since it doesn't implement Default
-        RawNews {
-            url: "".to_string(),
-            title: "placeholder".to_string(),
-            description: "".to_string(),
-            feed: "polymarket".to_string(),
-            published: Some(Utc::now()),
-            labels: Vec::new(),
-        }
     }
 
     async fn decide_from_news(&mut self, news: &RawNews) -> Option<Order> {
@@ -391,15 +381,17 @@ impl StrategyActor {
             for market in markets {
                 // Persist Market
                 if let Err(e) = self.db.save_market(&market).await {
-                    error!("Failed to save market {}: {}", market.id, e);
+                    error!("Failed to save market {}: {:#}", market.id, e);
                 }
 
                 if market.closed {
                     // Remove from index if closed
-                    if let Err(e) = self.market_index.delete_market(&market.id) {
-                        error!("Failed to delete closed market {}: {}", market.id, e);
-                    } else {
-                        info!("MarketIndex: Removed closed market {}", market.id);
+                    if self.market_index.contains(&market.id) {
+                        if let Err(e) = self.market_index.delete_market(&market.id) {
+                            error!("Failed to delete closed market {}: {}", market.id, e);
+                        } else {
+                            info!("MarketIndex: Removed closed market {}", market.id);
+                        }
                     }
                 } else {
                     let question = market
@@ -414,13 +406,16 @@ impl StrategyActor {
                         .unwrap_or("");
 
                     if !question.is_empty() {
-                        if let Err(e) =
-                            self.market_index
-                                .add_market(&market.id, question, description, "", None)
-                        {
+                        if let Err(e) = self.market_index.add_market(
+                            &market.id,
+                            question,
+                            description,
+                            "",
+                            None,
+                        ) {
                             error!("Failed to index market {}: {}", market.id, e);
                         } else {
-                            info!("MarketIndex: Added/Updated market {}", market.id);
+                            info!("MarketIndex: Added/Updated market {:#}", market.id);
                         }
                     }
                 }
@@ -434,7 +429,7 @@ impl StrategyActor {
 
         // 1. Persist Execution
         if let Err(e) = self.db.save_execution(execution).await {
-            error!("Failed to save execution: {}", e);
+            error!("Failed to save execution: {:#}", e);
         }
 
         // 2. Update Portfolio
@@ -460,7 +455,7 @@ impl StrategyActor {
 
             // 3. Persist Position
             if let Err(e) = self.db.upsert_position(&updated_pos).await {
-                error!("Failed to upsert position: {}", e);
+                error!("Failed to upsert position: {:#}", e);
             }
         }
 
@@ -533,7 +528,7 @@ impl Actor for StrategyActor {
                 }
             }
             Err(e) => {
-                error!("Failed to load positions from database: {}", e);
+                error!("Failed to load positions from database: {:#}", e);
             }
         }
 
@@ -542,11 +537,34 @@ impl Actor for StrategyActor {
             Ok(events) => {
                 let count = events.len();
                 self.detector.hydrate(events.clone());
-                self.sim_hash_cache.hydrate(events, &self.tokenization_config);
-                info!("Hydrated Deduplication Cache & SimHash with {} recent events", count);
+                self.sim_hash_cache
+                    .hydrate(events, &self.tokenization_config);
+                info!(
+                    "Hydrated Deduplication Cache & SimHash with {} recent events",
+                    count
+                );
             }
             Err(e) => {
-                error!("Failed to load recent events for deduplication: {}", e);
+                error!("Failed to load recent events for deduplication: {:#}", e);
+            }
+        }
+
+        // Hydrate Market Index
+        match self.db.load_active_markets().await {
+            Ok(markets) => {
+                let count = markets.len();
+                for (id, question, description) in markets {
+                    if let Err(e) =
+                        self.market_index
+                            .add_market(&id, &question, &description, "", None)
+                    {
+                        error!("Failed to index market {} from DB: {:#}", id, e);
+                    }
+                }
+                info!("Hydrated MarketIndex with {} active markets from DB", count);
+            }
+            Err(e) => {
+                error!("Failed to load active markets for indexing: {:#}", e);
             }
         }
 
@@ -577,7 +595,7 @@ impl Actor for StrategyActor {
                                 warn!("StrategyActor HALTED: {}", reason);
                             }
                         }
-                        Err(e) => error!("System status stream error: {}", e),
+                        Err(e) => error!("System status stream error: {:#}", e),
                     }
                 }
 
@@ -587,7 +605,7 @@ impl Actor for StrategyActor {
                         Ok(snap) => {
                             self.reconcile_positions(&snap);
                         }
-                        Err(e) => error!("Position snapshot stream error: {}", e),
+                        Err(e) => error!("Position snapshot stream error: {:#}", e),
                     }
                 }
 

@@ -43,11 +43,11 @@ impl Actor for ExecutionActor {
                     ts: Utc::now().timestamp_millis(),
                 };
                 if let Err(e) = self.bus.balance.publish(update).await {
-                    error!("Failed to publish initial balance: {}", e);
+                    error!("Failed to publish initial balance: {:#}", e);
                 }
             }
             Err(e) => {
-                error!("Failed to fetch initial balance: {}", e);
+                error!("Failed to fetch initial balance: {:#}", e);
             }
         }
 
@@ -72,10 +72,10 @@ impl Actor for ExecutionActor {
                                 timestamp: Utc::now().timestamp_millis(),
                             };
                             if let Err(e) = self.bus.positions_snapshot.publish(snapshot).await {
-                                error!("Failed to publish position snapshot: {}", e);
+                                error!("Failed to publish position snapshot: {:#}", e);
                             }
                         }
-                        Err(e) => error!("Failed to fetch positions: {}", e),
+                        Err(e) => error!("Failed to fetch positions: {:#}", e),
                     }
                 }
 

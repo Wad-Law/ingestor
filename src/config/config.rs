@@ -24,6 +24,8 @@ pub struct LlmCfg {
     pub model: String,
     #[serde(default = "default_llm_base_url", rename = "baseUrl")]
     pub base_url: String,
+    #[serde(default = "default_llm_rate_limit", rename = "rateLimitRpm")]
+    pub rate_limit_rpm: u32,
 }
 
 impl Default for LlmCfg {
@@ -32,6 +34,7 @@ impl Default for LlmCfg {
             api_key: default_llm_api_key(),
             model: default_llm_model(),
             base_url: default_llm_base_url(),
+            rate_limit_rpm: default_llm_rate_limit(),
         }
     }
 }
@@ -46,6 +49,10 @@ fn default_llm_model() -> String {
 
 fn default_llm_base_url() -> String {
     "https://api.openai.com/v1".to_string()
+}
+
+fn default_llm_rate_limit() -> u32 {
+    500
 }
 
 #[derive(Debug, Deserialize, Clone)]

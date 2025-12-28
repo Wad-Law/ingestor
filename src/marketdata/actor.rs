@@ -50,11 +50,11 @@ impl Actor for MarketPricingActor {
                             match self.client.fetch_market_data(&req.market_id).await {
                                 Ok(snap) => {
                                     if let Err(e) = self.bus.market_data.publish(snap).await {
-                                        error!("Failed to publish market data: {}", e);
+                                        error!("Failed to publish market data: {:#}", e);
                                     }
                                 }
                                 Err(e) => {
-                                    warn!("Failed to fetch market data for {}: {}", req.market_id, e);
+                                    warn!("Failed to fetch market data for {}: {:#}", req.market_id, e);
                                 }
                             }
                         }

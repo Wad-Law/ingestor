@@ -77,7 +77,7 @@ impl PolyExecutionClient {
             match LocalWallet::from_str(&cfg.api_secret) {
                 Ok(w) => Some(w.with_chain_id(137u64)),
                 Err(e) => {
-                    error!("Failed to create wallet from api_secret: {}", e);
+                    error!("Failed to create wallet from api_secret: {:#}", e);
                     None
                 }
             }

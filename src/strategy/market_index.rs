@@ -64,6 +64,10 @@ impl MarketIndex {
         })
     }
 
+    pub fn contains(&self, market_id: &str) -> bool {
+        self.vectors.contains_key(market_id)
+    }
+
     pub fn delete_market(&mut self, market_id: &str) -> Result<()> {
         let term = Term::from_field_text(self.id, market_id);
         self.writer.delete_term(term);

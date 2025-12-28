@@ -165,11 +165,16 @@ impl Database {
         .await?;
 
         // Verify tables exist
-        let tables: Vec<(String,)> = sqlx::query_as("SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'")
-            .fetch_all(&self.pool)
-            .await?;
-        
-        info!("Database tables initialized (Postgres). Found tables: {:?}", tables.iter().map(|t| &t.0).collect::<Vec<_>>());
+        let tables: Vec<(String,)> = sqlx::query_as(
+            "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        info!(
+            "Database tables initialized (Postgres). Found tables: {:?}",
+            tables.iter().map(|t| &t.0).collect::<Vec<_>>()
+        );
         Ok(())
     }
 
@@ -444,5 +449,27 @@ impl Database {
             events.push((title, description.unwrap_or_default()));
         }
         Ok(events)
+    }
+
+    pub async fn load_active_markets(&self) -> Result<Vec<(String, String, String)>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT id, question, description
+            FROM markets
+            WHERE active = true AND closed = false
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut markets = Vec::new();
+        for row in rows {
+            let id: String = row.get("id");
+            let question: String = row.get("question");
+            let description: Option<String> = row.get("description");
+            let description = description.unwrap_or_default();
+            markets.push((id, question, description));
+        }
+        Ok(markets)
     }
 }

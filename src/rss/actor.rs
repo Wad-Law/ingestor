@@ -115,7 +115,7 @@ impl Actor for RssActor {
                             .await;
                         }
                         Err(e) => {
-                            error!("RssActor: failed to fetch active poly market event: {}", e);
+                            error!("RssActor: failed to fetch active poly market event: {:#}", e);
                             // backoff to avoid hot loop on repeated failures
                             tokio::time::sleep(Duration::from_secs(5)).await;
                         }
