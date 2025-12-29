@@ -34,7 +34,7 @@ impl Database {
         sqlx::query(
             r#"
             CREATE TABLE IF NOT EXISTS events (
-                id BIGSERIAL PRIMARY KEY,
+                event_id BIGSERIAL PRIMARY KEY,
                 url TEXT NOT NULL UNIQUE,
                 title TEXT NOT NULL,
                 description TEXT,
@@ -50,7 +50,7 @@ impl Database {
         sqlx::query(
             r#"
             CREATE TABLE IF NOT EXISTS markets (
-                id TEXT PRIMARY KEY,
+                market_id TEXT PRIMARY KEY,
                 question TEXT NOT NULL,
                 description TEXT,
                 start_date TEXT,
@@ -70,8 +70,8 @@ impl Database {
         sqlx::query(
             r#"
             CREATE TABLE IF NOT EXISTS signals (
-                id BIGSERIAL PRIMARY KEY,
-                event_id BIGINT NOT NULL REFERENCES events(id),
+                signal_id BIGSERIAL PRIMARY KEY,
+                event_id BIGINT NOT NULL REFERENCES events(event_id),
                 market_id TEXT NOT NULL,
                 sentiment TEXT NOT NULL,
                 confidence FLOAT NOT NULL,
@@ -89,14 +89,14 @@ impl Database {
         sqlx::query(
             r#"
             CREATE TABLE IF NOT EXISTS orders (
-                id BIGSERIAL PRIMARY KEY,
-                client_order_id TEXT NOT NULL UNIQUE,
+                client_order_id TEXT PRIMARY KEY,
                 market_id TEXT NOT NULL,
                 token_id TEXT,
                 side TEXT NOT NULL,
                 price TEXT NOT NULL, -- Decimal stored as text
                 size TEXT NOT NULL,  -- Decimal stored as text
                 status TEXT NOT NULL DEFAULT 'New',
+                market_data_snapshot_id BIGINT, -- FK to market_data_snapshots
                 created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
             )
             "#,
@@ -108,9 +108,9 @@ impl Database {
         sqlx::query(
             r#"
             CREATE TABLE IF NOT EXISTS executions (
-                id BIGSERIAL PRIMARY KEY,
+                execution_id BIGSERIAL PRIMARY KEY,
                 exchange_order_id TEXT,
-                client_order_id TEXT NOT NULL,
+                client_order_id TEXT NOT NULL REFERENCES orders(client_order_id),
                 market_id TEXT NOT NULL,
                 token_id TEXT,
                 side TEXT NOT NULL,
@@ -147,7 +147,7 @@ impl Database {
         sqlx::query(
             r#"
             CREATE TABLE IF NOT EXISTS decisions (
-                id BIGSERIAL PRIMARY KEY,
+                decision_id BIGSERIAL PRIMARY KEY,
                 event_id BIGINT, -- Optional if we can't always link
                 market_id TEXT NOT NULL,
                 side TEXT NOT NULL,
@@ -164,13 +164,33 @@ impl Database {
         .execute(&self.pool)
         .await?;
 
-        // Retrieval Logs
+        // Candidate Markets (Renamed from Retrieval Logs)
         sqlx::query(
             r#"
-            CREATE TABLE IF NOT EXISTS retrieval_logs (
-                id BIGSERIAL PRIMARY KEY,
+            CREATE TABLE IF NOT EXISTS candidate_markets (
+                candidate_id BIGSERIAL PRIMARY KEY,
                 event_id BIGINT NOT NULL,
                 market_id TEXT NOT NULL,
+                created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+            )
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        // Market Data Snapshots
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS market_data_snapshots (
+                snapshot_id BIGSERIAL PRIMARY KEY,
+                market_id TEXT NOT NULL,
+                event_id BIGINT, -- Optional link to event context
+                book_ts_ms BIGINT,
+                best_bid TEXT,
+                best_ask TEXT,
+                bid_size TEXT,
+                ask_size TEXT,
+                tokens JSONB,
                 created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
             )
             "#,
@@ -243,11 +263,11 @@ impl Database {
         Ok(())
     }
 
-    pub async fn save_retrieval_log(&self, event_id: i64, market_id: &str) -> Result<()> {
+    pub async fn save_candidate_market(&self, event_id: i64, market_id: &str) -> Result<()> {
         let start = std::time::Instant::now();
         let res = sqlx::query(
             r#"
-            INSERT INTO retrieval_logs (event_id, market_id)
+            INSERT INTO candidate_markets (event_id, market_id)
             VALUES ($1, $2)
             "#,
         )
@@ -258,26 +278,26 @@ impl Database {
 
         match res {
             Ok(_) => {
-                metrics::counter!("database_queries_total", "table" => "retrieval_logs", "op" => "insert", "status" => "success").increment(1);
+                metrics::counter!("database_queries_total", "table" => "candidate_markets", "op" => "insert", "status" => "success").increment(1);
             }
             Err(_) => {
-                metrics::counter!("database_queries_total", "table" => "retrieval_logs", "op" => "insert", "status" => "error").increment(1);
+                metrics::counter!("database_queries_total", "table" => "candidate_markets", "op" => "insert", "status" => "error").increment(1);
             }
         }
         res?;
-        metrics::histogram!("database_query_duration_seconds", "table" => "retrieval_logs", "op" => "insert").record(start.elapsed().as_secs_f64());
+        metrics::histogram!("database_query_duration_seconds", "table" => "candidate_markets", "op" => "insert").record(start.elapsed().as_secs_f64());
         Ok(())
     }
 
     pub async fn save_event(&self, news: &RawNews) -> Result<i64> {
         let start = std::time::Instant::now();
-        // RETURNING id in Postgres
+        // RETURNING event_id
         let rec = sqlx::query(
             r#"
             INSERT INTO events (url, title, description, source, published_at)
             VALUES ($1, $2, $3, $4, $5)
             ON CONFLICT (url) DO UPDATE SET title = EXCLUDED.title -- Simple no-op or update
-            RETURNING id
+            RETURNING event_id
             "#,
         )
         .bind(&news.url)
@@ -295,7 +315,7 @@ impl Database {
 
         metrics::histogram!("database_query_duration_seconds", "table" => "events", "op" => "insert").record(start.elapsed().as_secs_f64());
 
-        Ok(rec?.get("id"))
+        Ok(rec?.get("event_id"))
     }
 
     pub async fn save_market(&self, market: &crate::core::types::PolyMarketMarket) -> Result<()> {
@@ -305,9 +325,9 @@ impl Database {
 
         let res = sqlx::query(
             r#"
-            INSERT INTO markets (id, question, description, start_date, end_date, active, closed, archived, tokens)
+            INSERT INTO markets (market_id, question, description, start_date, end_date, active, closed, archived, tokens)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-            ON CONFLICT (id) DO UPDATE SET
+            ON CONFLICT (market_id) DO UPDATE SET
                 question = EXCLUDED.question,
                 description = EXCLUDED.description,
                 active = EXCLUDED.active,
@@ -379,7 +399,7 @@ impl Database {
         Ok(())
     }
 
-    pub async fn save_order(&self, order: &Order) -> Result<()> {
+    pub async fn save_order(&self, order: &Order, market_data_snap_id: Option<i64>) -> Result<()> {
         let start = std::time::Instant::now();
         let side = match order.side {
             Side::Buy => "Buy",
@@ -391,8 +411,8 @@ impl Database {
 
         let res = sqlx::query(
             r#"
-            INSERT INTO orders (client_order_id, market_id, token_id, side, price, size)
-            VALUES ($1, $2, $3, $4, $5, $6)
+            INSERT INTO orders (client_order_id, market_id, token_id, side, price, size, market_data_snapshot_id)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
             "#,
         )
         .bind(&order.client_order_id)
@@ -401,6 +421,7 @@ impl Database {
         .bind(side)
         .bind(price_str)
         .bind(size_str)
+        .bind(market_data_snap_id)
         .execute(&self.pool)
         .await;
 
@@ -412,8 +433,9 @@ impl Database {
                 metrics::counter!("database_queries_total", "table" => "orders", "op" => "insert", "status" => "error").increment(1);
             }
         }
-        res?;
+
         metrics::histogram!("database_query_duration_seconds", "table" => "orders", "op" => "insert").record(start.elapsed().as_secs_f64());
+        res?;
         Ok(())
     }
 
@@ -598,7 +620,7 @@ impl Database {
     pub async fn load_active_markets(&self) -> Result<Vec<(String, String, String)>> {
         let rows = sqlx::query(
             r#"
-            SELECT id, question, description
+            SELECT market_id, question, description
             FROM markets
             WHERE active = true AND closed = false
             "#,
@@ -608,12 +630,54 @@ impl Database {
 
         let mut markets = Vec::new();
         for row in rows {
-            let id: String = row.get("id");
+            let id: String = row.get("market_id");
             let question: String = row.get("question");
             let description: Option<String> = row.get("description");
             let description = description.unwrap_or_default();
             markets.push((id, question, description));
         }
         Ok(markets)
+    }
+    pub async fn save_market_data_snap(
+        &self,
+        snap: &crate::core::types::MarketDataSnap,
+        event_id: Option<i64>,
+    ) -> Result<i64> {
+        let start = std::time::Instant::now();
+        let best_bid = snap.best_bid.to_string();
+        let best_ask = snap.best_ask.to_string();
+        let bid_size = snap.bid_size.to_string();
+        let ask_size = snap.ask_size.to_string();
+        let tokens_json = serde_json::to_value(&snap.tokens).unwrap_or(serde_json::Value::Null);
+
+        let rec = sqlx::query(
+            r#"
+            INSERT INTO market_data_snapshots (market_id, book_ts_ms, best_bid, best_ask, bid_size, ask_size, tokens, event_id)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            RETURNING snapshot_id
+            "#,
+        )
+        .bind(&snap.market_id)
+        .bind(snap.book_ts_ms)
+        .bind(best_bid)
+        .bind(best_ask)
+        .bind(bid_size)
+        .bind(ask_size)
+        .bind(tokens_json)
+        .bind(event_id)
+        .fetch_one(&self.pool)
+        .await;
+
+        match &rec {
+            Ok(_) => {
+                metrics::counter!("database_queries_total", "table" => "market_data_snapshots", "op" => "insert", "status" => "success").increment(1);
+            }
+            Err(_) => {
+                metrics::counter!("database_queries_total", "table" => "market_data_snapshots", "op" => "insert", "status" => "error").increment(1);
+            }
+        }
+        metrics::histogram!("database_query_duration_seconds", "table" => "market_data_snapshots", "op" => "insert").record(start.elapsed().as_secs_f64());
+
+        Ok(rec?.get("snapshot_id"))
     }
 }

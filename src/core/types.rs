@@ -93,7 +93,7 @@ pub struct Execution {
     pub ts_ms: i64,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Hash, Eq, PartialEq)]
 pub struct PolyMarketEvent {
     #[allow(dead_code)]
     pub id: String,
@@ -105,7 +105,7 @@ pub struct PolyMarketEvent {
     pub markets: Option<Vec<PolyMarketMarket>>,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Hash, Eq, PartialEq)]
 pub struct PolyMarketMarket {
     pub id: String,
     #[serde(default)]

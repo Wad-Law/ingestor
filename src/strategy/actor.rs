@@ -41,6 +41,7 @@ pub struct StrategyActor {
     pub status: crate::core::types::SystemStatus,
     pub top_candidates: usize,
     pub tokenization_config: TokenizationConfig,
+    pub market_state_cache: HashMap<String, u64>,
 }
 
 impl StrategyActor {
@@ -72,6 +73,7 @@ impl StrategyActor {
             status: crate::core::types::SystemStatus::Active,
             top_candidates: cfg.strategy.top_candidates,
             tokenization_config: TokenizationConfig::default(),
+            market_state_cache: HashMap::new(),
         }
     }
 
@@ -160,8 +162,8 @@ impl StrategyActor {
         // Log retrievals for debugging
         if let Some(eid) = event_db_id {
             for cand in &raw_candidates {
-                if let Err(e) = self.db.save_retrieval_log(eid, &cand.market_id).await {
-                    error!("Failed to save retrieval log: {}", e);
+                if let Err(e) = self.db.save_candidate_market(eid, &cand.market_id).await {
+                    error!("Failed to save candidate market: {}", e);
                 }
             }
         }
@@ -242,7 +244,7 @@ impl StrategyActor {
 
         // 9. Build Orders
         let orders = self
-            .build_orders_from_sized_decisions(&sized_decisions)
+            .build_orders_from_sized_decisions(&sized_decisions, event_db_id)
             .await;
 
         metrics::counter!("strategy_orders_generated_total").increment(orders.len() as u64);
@@ -327,7 +329,11 @@ impl StrategyActor {
         }
     }
 
-    async fn build_orders_from_sized_decisions(&self, sized: &[SizedDecision]) -> Vec<Order> {
+    async fn build_orders_from_sized_decisions(
+        &self,
+        sized: &[SizedDecision],
+        event_id: Option<i64>,
+    ) -> Vec<Order> {
         let mut orders = Vec::new();
         // Use configured bankroll
         let bankroll = self.bankroll;
@@ -354,12 +360,21 @@ impl StrategyActor {
                 Utc::now().timestamp_micros()
             );
 
+            // Snapshot ID for Audit
+            let mut snap_id = None;
+
             // Resolve token_id
             let mut token_id = None;
             if let Some(snap) = self
                 .market_data_cache
                 .get(&decision.candidate.candidate.market_id)
             {
+                // Persist Snapshot for Audit (Event Link)
+                match self.db.save_market_data_snap(snap, event_id).await {
+                    Ok(id) => snap_id = Some(id),
+                    Err(e) => error!("Failed to save audit snapshot: {:#}", e),
+                }
+
                 if let Some(tokens) = &snap.tokens {
                     let target_outcome = match &decision.side {
                         TradeSide::Buy(outcome) => outcome,
@@ -394,7 +409,7 @@ impl StrategyActor {
             };
 
             // Persist Order
-            if let Err(e) = self.db.save_order(&order).await {
+            if let Err(e) = self.db.save_order(&order, snap_id).await {
                 error!("Failed to save order: {:#}", e);
             }
 
@@ -411,9 +426,25 @@ impl StrategyActor {
     async fn decide_from_poly_event(&mut self, event: &PolyMarketEvent) -> Option<Order> {
         if let Some(markets) = &event.markets {
             for market in markets {
+                // Compute Hash
+                let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                std::hash::Hash::hash(&market, &mut hasher);
+                let new_hash = std::hash::Hasher::finish(&hasher);
+
+                // Check Cache
+                if let Some(cached_hash) = self.market_state_cache.get(&market.id) {
+                    if *cached_hash == new_hash {
+                        // Unchanged, skip
+                        continue;
+                    }
+                }
+
                 // Persist Market
                 if let Err(e) = self.db.save_market(&market).await {
                     error!("Failed to save market {}: {:#}", market.id, e);
+                } else {
+                    // Update Cache on success
+                    self.market_state_cache.insert(market.id.clone(), new_hash);
                 }
 
                 if market.closed {
@@ -654,6 +685,12 @@ impl Actor for StrategyActor {
                     match res {
                         Ok(snap) => {
                             metrics::counter!("strategy_bus_messages_total", "channel" => "market_data").increment(1);
+
+                            // Persist Snapshot
+                            if let Err(e) = self.db.save_market_data_snap(&snap, None).await {
+                                error!("Failed to save market data snap: {:#}", e);
+                            }
+
                             if let Some(order) = self.decide_from_tick(&snap) {
                                 // Publish order to orders topic
                                 self.bus.orders.publish(order).await?;
@@ -805,6 +842,7 @@ mod tests {
             portfolio: Portfolio::default(),
             status: crate::core::types::SystemStatus::Active,
             tokenization_config: TokenizationConfig::default(),
+            market_state_cache: HashMap::new(),
         };
 
         // Mock Market Data
@@ -853,7 +891,7 @@ mod tests {
         };
 
         let orders_yes = actor
-            .build_orders_from_sized_decisions(&[decision_yes])
+            .build_orders_from_sized_decisions(&[decision_yes], None)
             .await;
         assert_eq!(orders_yes.len(), 1);
         assert_eq!(orders_yes[0].token_id, Some(yes_token.to_string()));
@@ -876,7 +914,7 @@ mod tests {
         };
 
         let orders_no = actor
-            .build_orders_from_sized_decisions(&[decision_no])
+            .build_orders_from_sized_decisions(&[decision_no], None)
             .await;
         assert_eq!(orders_no.len(), 1);
         assert_eq!(orders_no[0].token_id, Some(no_token.to_string()));

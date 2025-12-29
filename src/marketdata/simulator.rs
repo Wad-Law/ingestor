@@ -23,7 +23,18 @@ impl MarketDataClient for SimMarketDataClient {
             best_ask: Decimal::new(51, 2), // 0.51
             bid_size: Decimal::new(1000, 0),
             ask_size: Decimal::new(1000, 0),
-            tokens: None,
+            tokens: Some(vec![
+                crate::core::types::MarketToken {
+                    token_id: format!("{}-Yes", market_id),
+                    outcome: "Yes".to_string(),
+                    price: Decimal::new(50, 2),
+                },
+                crate::core::types::MarketToken {
+                    token_id: format!("{}-No", market_id),
+                    outcome: "No".to_string(),
+                    price: Decimal::new(50, 2),
+                },
+            ]),
             question: "Simulated Market".to_string(),
         })
     }

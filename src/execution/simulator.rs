@@ -96,7 +96,7 @@ impl ExecutionClient for SimExecutionClient {
             exchange_order_id: Some("sim_order_id".to_string()),
             client_order_id: order.client_order_id.clone(),
             market_id: order.market_id.clone(),
-            token_id: order.token_id.clone(),
+            token_id: Some(token_id),
             side: order.side,
             avg_px: order.price,
             filled: filled_amt,

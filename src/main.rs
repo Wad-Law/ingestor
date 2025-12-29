@@ -76,6 +76,8 @@ async fn main() -> Result<()> {
         collector.describe();
         loop {
             collector.collect();
+            info!("System metrics collected");
+            metrics::counter!("process_collector_heartbeat").increment(1);
             tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
         }
     });
