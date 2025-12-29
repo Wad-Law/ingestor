@@ -60,6 +60,7 @@ impl MarketAnalyst {
             };
 
             // Call LLM
+            metrics::counter!("strategy_analyst_llm_calls_total").increment(1);
             match self
                 .llm_client
                 .analyze(&raw_news.title, &market_question, &outcomes)
@@ -67,12 +68,19 @@ impl MarketAnalyst {
             {
                 Ok((signal, prompt)) => {
                     info!("LLM Signal for {}: {:?}", candidate.market_id, signal);
+                    metrics::counter!("strategy_analyst_signals_total", "sentiment" => signal.sentiment.clone()).increment(1);
 
                     // Persist Signal
                     if let Some(eid) = event_db_id {
                         if let Err(e) = self
                             .db
-                            .save_signal(eid, &candidate.market_id, &signal, &prompt, self.llm_client.model())
+                            .save_signal(
+                                eid,
+                                &candidate.market_id,
+                                &signal,
+                                &prompt,
+                                self.llm_client.model(),
+                            )
                             .await
                         {
                             error!("Failed to save signal: {:#}", e);
@@ -80,25 +88,33 @@ impl MarketAnalyst {
                     }
 
                     // Convert signal to TradeSide and Probability
-                    if signal.sentiment != "None" && outcomes.iter().any(|o| o.eq_ignore_ascii_case(&signal.sentiment)) {
+                    if signal.sentiment != "None"
+                        && outcomes
+                            .iter()
+                            .any(|o| o.eq_ignore_ascii_case(&signal.sentiment))
+                    {
                         let prob = Decimal::from_f64(0.5 + (signal.confidence * 0.5))
-                                    .unwrap_or(Decimal::new(5, 1));
-                        
+                            .unwrap_or(Decimal::new(5, 1));
+
                         // Get market price for the specific outcome
-                        let market_price = if let Some(snap) = market_data_cache.get(&candidate.market_id) {
-                            if let Some(tokens) = &snap.tokens {
-                                tokens.iter()
-                                    .find(|t| t.outcome.eq_ignore_ascii_case(&signal.sentiment))
-                                    .map(|t| t.price)
-                                    .unwrap_or(Decimal::new(5, 1))
+                        let market_price =
+                            if let Some(snap) = market_data_cache.get(&candidate.market_id) {
+                                if let Some(tokens) = &snap.tokens {
+                                    tokens
+                                        .iter()
+                                        .find(|t| t.outcome.eq_ignore_ascii_case(&signal.sentiment))
+                                        .map(|t| t.price)
+                                        .unwrap_or(Decimal::new(5, 1))
+                                } else {
+                                    Decimal::new(5, 1)
+                                }
                             } else {
                                 Decimal::new(5, 1)
-                            }
-                        } else {
-                             Decimal::new(5, 1)
-                        };
+                            };
 
-                         if prob > Decimal::new(6, 1) {
+                        if prob > Decimal::new(6, 1) {
+                            metrics::counter!("strategy_analyst_confidence_high_total")
+                                .increment(1);
                             let edged = EdgedCandidate {
                                 candidate: candidate.clone(),
                                 score: prob,

@@ -71,16 +71,6 @@ LLM_MODEL="gpt-5-nano" # Default
 LLM_API_KEY="sk-..."
 ```
 
-```
-
-### ⚠️ Important: Schema Changes
-If you are upgrading from a previous version, note that the database schema has been refactored (renaming `retrieval_logs` to `candidate_markets`, renaming `id` columns to `[entity]_id`).
-**You must reset your database:**
-```bash
-docker-compose down -v
-docker-compose up -d
-```
-
 ### Running
 ```bash
 ### Running
