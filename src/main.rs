@@ -43,7 +43,6 @@ use persistence::database::Database;
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .json()
-        .flatten_event(true)
         .with_max_level(tracing::Level::INFO)
         .with_current_span(false)
         .init();
