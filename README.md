@@ -28,7 +28,8 @@ Built on a modular **Actor System** using `tokio` broadcast channels (The **Bus*
 
 ### Prerequisites
 - Rust (latest stable)
-- Node.js (for some auxiliary scripts if needed)
+- **PostgreSQL 16+** (Required for persistence)
+- **Docker & Docker Compose** (For DB and Observability stack)
 
 ### Configuration
 
@@ -52,15 +53,28 @@ POLY_API_KEY="your_api_key"
 POLY_API_SECRET="your_api_secret"
 POLY_PASSPHRASE="your_passphrase"
 
+# Database Config
+DATABASE_URL="postgres://user:password@localhost:5432/polymind"
+
 # LLM Config
-LLM_PROVIDER="openai" # or "anthropic"
+LLM_MODEL="gpt-5-nano" # Default
 LLM_API_KEY="sk-..."
 ```
 
 ### Running
 ```bash
-# Run polymind
-cargo run --bin polymind
+### Running
+
+1. **Start Infrastructure** (Postgres + Observability):
+    ```bash
+    docker-compose up -d
+    ```
+
+2. **Run Polymind**:
+    ```bash
+    cargo run --bin polymind
+    ```
+    *Ensure `DATABASE_URL` is set.*
 
 # Run tests
 cargo test

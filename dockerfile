@@ -9,5 +9,6 @@ RUN cargo build --release
 # ---- Runtime stage (distroless) ----
 FROM gcr.io/distroless/cc-debian12
 COPY --from=build /app/target/release/polymind /usr/local/bin/polymind
+COPY config.yml .
 ENTRYPOINT ["/usr/local/bin/polymind"]
 
