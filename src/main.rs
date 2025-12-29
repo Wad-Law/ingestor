@@ -41,7 +41,11 @@ use persistence::database::Database;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    tracing_subscriber::fmt().with_ansi(false).init();
+    tracing_subscriber::fmt()
+        .json()
+        .with_max_level(tracing::Level::INFO)
+        .with_current_span(false)
+        .init();
     dotenv::dotenv().ok();
 
     // Initialize Prometheus Exporter
@@ -63,6 +67,8 @@ async fn main() -> Result<()> {
         info!("Metrics endpoint listening on 0.0.0.0:9000/metrics");
         axum::serve(listener, app).await.unwrap();
     });
+
+    metrics::counter!("polymind_startups_total").increment(1);
 
     let cfg = AppCfg::load("config.yml")?;
 
