@@ -41,7 +41,7 @@ use persistence::database::Database;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    tracing_subscriber::fmt::init();
+    tracing_subscriber::fmt().with_ansi(false).init();
     dotenv::dotenv().ok();
 
     // Initialize Prometheus Exporter
